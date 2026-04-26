@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type OpenAIProvider struct {
@@ -29,7 +28,7 @@ func NewOpenAIProvider(apiKey string, endpoint string, model string) *OpenAIProv
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:   model,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client:  &http.Client{Timeout: 0},
 	}
 }
 
