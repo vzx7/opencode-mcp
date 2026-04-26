@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +16,14 @@ import (
 )
 
 type ToolExecutor struct {
-	defaultPath   string
-	defaultLLM    llm.LLMProvider
-	defaultLang   string
-	apiKey        string
-	endpoint      string
-	mu            sync.RWMutex
+	defaultPath string
+	defaultLLM llm.LLMProvider
+	defaultLang string
+	apiKey    string
+	endpoint  string
+	mu       sync.RWMutex
+	debug    bool
+	logger   *log.Logger
 }
 
 func NewToolExecutor(defaultPath string, defaultLLM llm.LLMProvider, apiKey, endpoint, language string) *ToolExecutor {
@@ -29,11 +32,16 @@ func NewToolExecutor(defaultPath string, defaultLLM llm.LLMProvider, apiKey, end
 	}
 	return &ToolExecutor{
 		defaultPath: defaultPath,
-		defaultLLM:  defaultLLM,
+		defaultLLM: defaultLLM,
 		defaultLang: language,
-		apiKey:      apiKey,
-		endpoint:    endpoint,
+		apiKey:    apiKey,
+		endpoint:  endpoint,
 	}
+}
+
+func (te *ToolExecutor) SetDebug(debug bool) {
+	te.debug = debug
+	te.logger = log.New(os.Stdout, "[TOOL] ", log.LstdFlags)
 }
 
 type ToolInput struct {
@@ -100,9 +108,21 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 	llmProvider := te.getLLM(input.Provider, input.LLM)
 	language := te.getLanguage(input.Language)
 	prompt := llm.BuildReviewPrompt(pm, language)
+
+	if te.debug {
+		te.logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
+	}
+
 	llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 	if err != nil {
+		if te.debug {
+			te.logger.Printf("<<< LLM Error: %v", err)
+		}
 		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	if te.debug {
+		te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 	}
 
 	report := te.buildReportFromLLM(llmResponse)
@@ -202,8 +222,16 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
 		prompt := llm.BuildCompliancePrompt(rules, pm, language)
+
+		if te.debug {
+			te.logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
+		}
+
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
+			if te.debug {
+				te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+			}
 			report.Summary = llmResponse
 		}
 	}
@@ -256,8 +284,16 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
 		prompt := llm.BuildModuleAuditPrompt(modulePath, moduleContent, language)
+
+		if te.debug {
+			te.logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
+		}
+
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
+			if te.debug {
+				te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+			}
 			report.Summary = llmResponse
 		}
 	}

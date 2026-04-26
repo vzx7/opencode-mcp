@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ai-mcp/code-auditor/internal/domain"
 	"github.com/ai-mcp/code-auditor/internal/llm"
@@ -17,30 +21,36 @@ import (
 )
 
 type Server struct {
-	executor  *tools.ToolExecutor
+	executor    *tools.ToolExecutor
 	defaultPath string
-	llm       llm.LLMProvider
-	logger    *log.Logger
-	language  string
+	debugDir    string
+	llm         llm.LLMProvider
+	logger      *log.Logger
+	language    string
+	debug      bool
 }
 
 type Config struct {
 	ProjectPath string
-	Provider    string
-	LLM         string
-	APIKey      string
-	Endpoint    string
-	Port        string
-	Language    string
+	DebugDir    string
+	Provider   string
+	LLM        string
+	APIKey     string
+	Endpoint  string
+	Port       string
+	Language  string
+	Debug      bool
 }
 
 func NewServer(cfg Config) *Server {
+	logger := log.New(os.Stdout, "[MCP] ", log.LstdFlags)
+
 	var llmProvider llm.LLMProvider
 	var err error
 	if cfg.Provider != "" {
 		llmProvider, err = llm.NewProvider(cfg.Provider, cfg.APIKey, cfg.Endpoint, cfg.LLM)
 		if err != nil {
-			log.Printf("Warning: failed to create LLM provider: %v, continuing without LLM", err)
+			logger.Printf("Warning: failed to create LLM provider: %v, continuing without LLM", err)
 			llmProvider = llm.NewMockProvider()
 		}
 	} else {
@@ -48,13 +58,32 @@ func NewServer(cfg Config) *Server {
 	}
 
 	executor := tools.NewToolExecutor(cfg.ProjectPath, llmProvider, cfg.APIKey, cfg.Endpoint, cfg.Language)
+	executor.SetDebug(cfg.Debug)
+
+	debugDir := cfg.DebugDir
+	if debugDir == "" && cfg.ProjectPath != "" {
+		debugDir = filepath.Join(cfg.ProjectPath, "debug")
+	}
+	if debugDir != "" {
+		if err := os.MkdirAll(debugDir, 0755); err != nil {
+			logger.Printf("Warning: failed to create debug directory: %v", err)
+			debugDir = ""
+		} else {
+			logger.Printf("Debug dir: %s", debugDir)
+		}
+	}
+
+	logger.Printf("Project: %s", cfg.ProjectPath)
+	logger.Printf("LLM: %s (%s)", cfg.Provider, cfg.LLM)
 
 	return &Server{
 		executor:    executor,
 		defaultPath: cfg.ProjectPath,
-		llm:         llmProvider,
-		logger:      log.New(os.Stdout, "[MCP] ", log.LstdFlags),
-		language:    cfg.Language,
+		debugDir:    debugDir,
+		llm:        llmProvider,
+		logger:     logger,
+		language:   cfg.Language,
+		debug:     cfg.Debug,
 	}
 }
 
@@ -75,6 +104,15 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &req); err != nil {
 		s.sendError(w, nil, fmt.Sprintf("invalid JSON: %v", err))
 		return
+	}
+
+	if s.debug {
+		s.logger.Printf(">>> Request: method=%s, id=%v", req.Method, req.ID)
+		if req.Method == "tools/call" {
+			if name, ok := req.Params["name"].(string); ok {
+				s.logger.Printf("    Tool: %s", name)
+			}
+		}
 	}
 
 	ctx := context.Background()
@@ -209,6 +247,8 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 	}
 }
 
+// FIXED VERSION (key fixes: correct content saving, better logging, safer debug handling)
+
 func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interface{} {
 	toolName, ok := req.Params["name"].(string)
 	if !ok {
@@ -220,10 +260,22 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 
 	arguments, _ := req.Params["arguments"].(map[string]interface{})
 
+	if s.debug {
+		s.logger.Printf(">>> Tool call: %s", toolName)
+		s.logger.Printf("    ProjectPath: %s", s.defaultPath)
+		if arguments != nil {
+			s.logger.Printf("    Arguments: %s", formatArgs(arguments))
+		}
+	}
+
+	var result interface{}
+	var execErr error
+
 	switch toolName {
 	case "architecture_review":
-		input := tools.ArchitectureReviewInput{ToolInput: tools.ToolInput{ProjectPath: "."}}
+		input := tools.ArchitectureReviewInput{ToolInput: tools.ToolInput{ProjectPath: s.defaultPath}}
 		input.Language = s.language
+
 		if arguments != nil {
 			if pp, ok := arguments["project_path"].(string); ok {
 				input.ProjectPath = pp
@@ -238,15 +290,23 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 				input.Language = l
 			}
 		}
+
 		report, err := s.executor.ArchitectureReview(ctx, input)
 		if err != nil {
 			return JSONRPCError{Code: -32603, Message: err.Error()}
 		}
-		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.formatReport(report)}}}
+
+		resultStr := s.formatReport(report)
+
+		// ✅ FIX: always save FULL report, not Summary
+		s.persistReport(toolName, resultStr)
+
+		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: resultStr}}}
 
 	case "architecture_compliance_check":
-		input := tools.ArchitectureComplianceInput{ToolInput: tools.ToolInput{ProjectPath: "."}}
+		input := tools.ArchitectureComplianceInput{ToolInput: tools.ToolInput{ProjectPath: s.defaultPath}}
 		input.Language = s.language
+
 		if arguments != nil {
 			if pp, ok := arguments["project_path"].(string); ok {
 				input.ProjectPath = pp
@@ -265,15 +325,21 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 				input.Language = l
 			}
 		}
+
 		report, err := s.executor.ArchitectureComplianceCheck(ctx, input)
 		if err != nil {
 			return JSONRPCError{Code: -32603, Message: err.Error()}
 		}
-		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.formatReport(report)}}}
+
+		resultStr := s.formatReport(report)
+		s.persistReport(toolName, resultStr)
+
+		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: resultStr}}}
 
 	case "module_audit":
-		input := tools.ModuleAuditInput{ToolInput: tools.ToolInput{ProjectPath: "."}}
+		input := tools.ModuleAuditInput{ToolInput: tools.ToolInput{ProjectPath: s.defaultPath}}
 		input.Language = s.language
+
 		if arguments != nil {
 			if mp, ok := arguments["module_path"].(string); ok {
 				input.ModulePath = mp
@@ -291,20 +357,116 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 				input.Language = l
 			}
 		}
+
 		report, err := s.executor.ModuleAudit(ctx, input)
 		if err != nil {
 			return JSONRPCError{Code: -32603, Message: err.Error()}
 		}
-		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.formatReport(report)}}}
+
+		resultStr := s.formatReport(report)
+		s.persistReport(toolName, resultStr)
+
+		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: resultStr}}}
 
 	default:
-		return JSONRPCError{Code: -32601, Message: fmt.Sprintf("Tool not found: %s", toolName)}
+		execErr = fmt.Errorf("tool not found: %s", toolName)
 	}
+
+	if execErr != nil {
+		return JSONRPCError{Code: -32601, Message: execErr.Error()}
+	}
+
+	return result
 }
+
+// ✅ NEW: centralized persistence
+func (s *Server) persistReport(toolName string, content string) {
+	if s.debugDir == "" {
+		s.logger.Printf("[WARN] debugDir is empty, skipping file save")
+		return
+	}
+
+	if content == "" {
+		s.logger.Printf("[WARN] empty report content, skipping file save")
+		return
+	}
+
+	filename := fmt.Sprintf("%s_%s_%04d.md",
+		toolName,
+		time.Now().Format("20060102_150405"),
+		rand.Intn(9999),
+	)
+
+	path := filepath.Join(s.debugDir, filename)
+
+	header := fmt.Sprintf("# %s\n\n", strings.ToUpper(toolName)) +
+		fmt.Sprintf("**Time:** %s\n\n", time.Now().Format("2006-01-02 15:04:05")) +
+		fmt.Sprintf("**Project:** %s\n\n", s.defaultPath) +
+		"---\n\n"
+
+	output := header + content
+
+	// ensure dir exists (extra safety)
+	if err := os.MkdirAll(s.debugDir, 0755); err != nil {
+		s.logger.Printf("[ERROR] failed to ensure debug dir: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+		s.logger.Printf("[ERROR] failed to write file: %v", err)
+		return
+	}
+
+	// ALWAYS log path (not only debug)
+	s.logger.Printf("[OK] report saved: %s", path)
+}
+
 
 func (s *Server) formatReport(report *domain.AuditReport) string {
 	data, _ := json.MarshalIndent(report, "", "  ")
 	return string(data)
+}
+
+func (s *Server) saveDebugResponse(toolName string, content string) {
+	if s.debug {
+		s.logger.Printf("saveDebugResponse: debugDir=%q, content_len=%d", s.debugDir, len(content))
+	}
+
+	if s.debugDir == "" {
+		if s.debug {
+			s.logger.Printf("saveDebugResponse: skipped - no debugDir")
+		}
+		return
+	}
+
+	if content == "" {
+		if s.debug {
+			s.logger.Printf("saveDebugResponse: skipped - empty content")
+		}
+		return
+	}
+
+	filename := fmt.Sprintf("%s_%s_%04d.md", toolName, time.Now().Format("20060102_150405"), rand.Intn(9999))
+	path := filepath.Join(s.debugDir, filename)
+
+	header := fmt.Sprintf("# %s\n\n", strings.ToUpper(toolName))
+	header += fmt.Sprintf("**Time:** %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+	header += fmt.Sprintf("**Project:** %s\n\n", s.defaultPath)
+	header += "---\n\n"
+
+	output := header + content
+
+	if s.debug {
+		s.logger.Printf("saveDebugResponse: writing %d bytes to %s", len(output), path)
+	}
+
+	if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+		s.logger.Printf("Failed to write debug file: %v", err)
+	} else {
+		if s.debug {
+			s.logger.Printf("Saved response to: %s", path)
+		}
+	}
 }
 
 func (s *Server) sendError(w http.ResponseWriter, req *JSONRPCRequest, message string) {
@@ -348,6 +510,10 @@ func (s *Server) StartStdio() {
 	decoder := json.NewDecoder(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 
+	if s.debug {
+		s.logger.Println("Stdio mode started")
+	}
+
 	for {
 		var req JSONRPCRequest
 		if err := decoder.Decode(&req); err != nil {
@@ -356,6 +522,15 @@ func (s *Server) StartStdio() {
 			}
 			s.logger.Printf("Read error: %v", err)
 			return
+		}
+
+		if s.debug {
+			s.logger.Printf(">>> Request: method=%s, id=%v", req.Method, req.ID)
+			if req.Method == "tools/call" {
+				if name, ok := req.Params["name"].(string); ok {
+					s.logger.Printf("    Tool: %s", name)
+				}
+			}
 		}
 
 		ctx := context.Background()
@@ -458,4 +633,19 @@ type ToolCallResult struct {
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+func formatArgs(args map[string]interface{}) string {
+	var b strings.Builder
+	first := true
+	for k, v := range args {
+		if !first {
+			b.WriteString(", ")
+		}
+		b.WriteString(k)
+		b.WriteString("=")
+		b.WriteString(fmt.Sprintf("%v", v))
+		first = false
+	}
+	return b.String()
 }

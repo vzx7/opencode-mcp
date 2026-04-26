@@ -1,7 +1,10 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -16,8 +19,25 @@ type Config struct {
 	Language  string
 }
 
+func (c *Config) Validate() error {
+	if c.Provider != "mock" && c.APIKey == "" {
+		return errors.New("API_KEY required for non-mock provider")
+	}
+	if c.Port != "" {
+		if _, err := strconv.Atoi(c.Port); err != nil {
+			return fmt.Errorf("invalid PORT: %w", err)
+		}
+	}
+	if c.Language != "" && c.Language != "ru" && c.Language != "en" {
+		return errors.New("LANGUAGE must be 'ru' or 'en'")
+	}
+	return nil
+}
+
 func Load() (*Config, error) {
-	godotenv.Load()
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("loading .env: %w", err)
+	}
 
 	cfg := &Config{
 		Provider: getEnv("PROVIDER", "mock"),
@@ -27,6 +47,10 @@ func Load() (*Config, error) {
 		Project:  os.Getenv("PROJECT"),
 		Port:     getEnv("PORT", "8080"),
 		Language: getEnv("LANGUAGE", "ru"),
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
 	return cfg, nil
