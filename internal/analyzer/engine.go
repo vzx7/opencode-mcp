@@ -1,9 +1,10 @@
 package analyzer
 
 import (
-	"encoding/json"
+	"bufio"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,24 @@ import (
 
 	"github.com/ai-mcp/code-auditor/internal/domain"
 )
+
+const (
+	scorePenaltyLayerMissing = 10
+	scorePenaltyComponentMissing = 5
+)
+
+var defaultLayerPatterns = []struct {
+	name    string
+	prefix  string
+}{
+	{"cmd", "cmd"},
+	{"internal", "internal"},
+	{"pkg", "pkg"},
+	{"api", "internal/api"},
+	{"domain", "internal/domain"},
+	{"service", "internal/service"},
+	{"repository", "internal/repository"},
+}
 
 type Analyzer struct {
 	rootPath string
@@ -73,7 +92,7 @@ func (a *Analyzer) BuildProjectMap() (*domain.ProjectMap, error) {
 }
 
 func (a *Analyzer) scanGoFiles(dir string, mod *domain.Module) {
-	filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -84,12 +103,19 @@ func (a *Analyzer) scanGoFiles(dir string, mod *domain.Module) {
 			return nil
 		}
 		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-			relPath, _ := filepath.Rel(a.rootPath, path)
+			relPath, err := filepath.Rel(a.rootPath, path)
+			if err != nil {
+				log.Printf("Failed to get relative path for %s: %v", path, err)
+				return nil
+			}
 			mod.Files = append(mod.Files, relPath)
 			mod.GoFiles++
 		}
 		return nil
-	})
+})
+	if err != nil {
+		log.Printf("Error walking directory %s: %v", dir, err)
+	}
 }
 
 func (a *Analyzer) findEntrypoints(dir string, pm *domain.ProjectMap) {
@@ -105,33 +131,17 @@ func (a *Analyzer) findEntrypoints(dir string, pm *domain.ProjectMap) {
 }
 
 func (a *Analyzer) detectLayers(pm *domain.ProjectMap) {
-	layerPatterns := []struct {
-		name    string
-		prefix  string
-	}{
-		{"cmd", "cmd"},
-		{"internal", "internal"},
-		{"pkg", "pkg"},
-		{"api", "internal/api"},
-		{"domain", "internal/domain"},
-		{"service", "internal/service"},
-		{"repository", "internal/repository"},
-	}
-
-	hasLayer := func(path string) bool {
-		for _, l := range pm.Layers {
-			for _, p := range l.Paths {
-				if strings.HasPrefix(path, p) {
-					return true
-				}
-			}
+	existingPaths := make(map[string]bool)
+	for _, l := range pm.Layers {
+		for _, p := range l.Paths {
+			existingPaths[p] = true
 		}
-		return false
 	}
 
 	for _, m := range pm.Modules {
-		for _, pattern := range layerPatterns {
-			if strings.HasPrefix(m.Path, filepath.Join(a.rootPath, pattern.prefix)) && !hasLayer(m.Path) {
+		for _, pattern := range defaultLayerPatterns {
+			fullPath := filepath.Join(a.rootPath, pattern.prefix)
+			if strings.HasPrefix(m.Path, fullPath) && !existingPaths[m.Path] {
 				found := false
 				for i := range pm.Layers {
 					if pm.Layers[i].Name == pattern.name {
@@ -146,6 +156,7 @@ func (a *Analyzer) detectLayers(pm *domain.ProjectMap) {
 						Paths: []string{m.Path},
 					})
 				}
+				existingPaths[m.Path] = true
 			}
 		}
 	}
@@ -153,17 +164,32 @@ func (a *Analyzer) detectLayers(pm *domain.ProjectMap) {
 
 func (a *Analyzer) analyzeGoMod(pm *domain.ProjectMap) {
 	goModPath := filepath.Join(a.rootPath, "go.mod")
-	data, err := os.ReadFile(goModPath)
+	file, err := os.Open(goModPath)
 	if err != nil {
 		return
 	}
+	defer file.Close()
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "require (") || strings.HasPrefix(line, "\trequire") {
+	inRequireBlock := false
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		
+		if strings.HasPrefix(line, "require (") {
+			inRequireBlock = true
+			continue
+		}
+		if line == ")" {
+			inRequireBlock = false
+			continue
+		}
+		
+		if inRequireBlock || strings.HasPrefix(line, "require ") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				dep := parts[1]
+				// убираем версию (v1.2.3)
+				dep = strings.Split(dep, " ")[0]
 				if !strings.HasPrefix(dep, "github.com/ai-mcp/") {
 					pm.Dependencies["github.com"] = append(pm.Dependencies["github.com"], dep)
 				}
@@ -195,7 +221,7 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 				Suggestion: fmt.Sprintf("Add layer for %s components", rule.Name),
 			}
 			report.Issues = append(report.Issues, issue)
-			report.Score -= 10
+			report.Score -= scorePenaltyLayerMissing
 			continue
 		}
 
@@ -215,7 +241,7 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 					Suggestion: fmt.Sprintf("Consider adding %s", allowed),
 				}
 				report.Issues = append(report.Issues, issue)
-				report.Score -= 5
+				report.Score -= scorePenaltyComponentMissing
 			}
 		}
 	}
@@ -284,9 +310,7 @@ func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditRep
 
 	relPath, _ := filepath.Rel(projectRoot, absModulePath)
 	report.Recommendations = append(report.Recommendations, fmt.Sprintf("Review: %s", relPath))
-
-	data, _ := json.MarshalIndent(report, "", "  ")
-	report.Summary = string(data)
+	report.Recommendations = append(report.Recommendations, fmt.Sprintf("Found %d Go files", len(goFiles)))
 
 	return report, nil
 }
