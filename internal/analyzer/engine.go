@@ -78,6 +78,7 @@ func (a *Analyzer) BuildProjectMap() (*domain.ProjectMap, error) {
 		return nil, fmt.Errorf("failed to walk directory: %w", err)
 	}
 
+	a.addRootModule(pm)
 	a.detectLayers(pm)
 	a.analyzeGoMod(pm)
 
@@ -123,10 +124,34 @@ func (a *Analyzer) findEntrypoints(dir string, pm *domain.ProjectMap) {
 	if err != nil {
 		return
 	}
+	hasGoFiles := false
 	for _, e := range entries {
 		if e.IsDir() {
 			pm.Entrypoints = append(pm.Entrypoints, filepath.Join(dir, e.Name()))
+		} else if strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") {
+			hasGoFiles = true
 		}
+	}
+	// cmd/main.go directly inside cmd/ (no subdirectory per binary)
+	if hasGoFiles {
+		pm.Entrypoints = append(pm.Entrypoints, dir)
+	}
+}
+
+func (a *Analyzer) addRootModule(pm *domain.ProjectMap) {
+	entries, err := os.ReadDir(a.rootPath)
+	if err != nil {
+		return
+	}
+	mod := domain.Module{Name: "root", Path: a.rootPath, Type: "main", Files: []string{}}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") {
+			mod.Files = append(mod.Files, e.Name())
+			mod.GoFiles++
+		}
+	}
+	if mod.GoFiles > 0 {
+		pm.Modules = append(pm.Modules, mod)
 	}
 }
 
@@ -184,16 +209,23 @@ func (a *Analyzer) analyzeGoMod(pm *domain.ProjectMap) {
 			continue
 		}
 		
-		if inRequireBlock || strings.HasPrefix(line, "require ") {
+		var dep string
+		switch {
+		case inRequireBlock:
+			// "github.com/foo/bar v1.2.3 // indirect" → parts[0] is the package
+			parts := strings.Fields(line)
+			if len(parts) >= 1 && !strings.HasPrefix(parts[0], "//") {
+				dep = parts[0]
+			}
+		case strings.HasPrefix(line, "require "):
+			// "require github.com/foo/bar v1.2.3" → parts[1] is the package
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				dep := parts[1]
-				// убираем версию (v1.2.3)
-				dep = strings.Split(dep, " ")[0]
-				if !strings.HasPrefix(dep, "github.com/ai-mcp/") {
-					pm.Dependencies["github.com"] = append(pm.Dependencies["github.com"], dep)
-				}
+				dep = parts[1]
 			}
+		}
+		if dep != "" && !strings.HasPrefix(dep, "github.com/ai-mcp/") {
+			pm.Dependencies["github.com"] = append(pm.Dependencies["github.com"], dep)
 		}
 	}
 }
@@ -261,7 +293,7 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 
 func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditReport, error) {
 	report := &domain.AuditReport{
-		Score:          80,
+		Score:          100,
 		Summary:        "Module audit complete",
 		Issues:         []domain.Issue{},
 		Recommendations: []string{},
@@ -281,14 +313,24 @@ func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditRep
 	var goFiles []string
 
 	if info.IsDir() {
-		files, err := os.ReadDir(absModulePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read module path: %w", err)
-		}
-		for _, f := range files {
-			if !f.IsDir() && strings.HasSuffix(f.Name(), ".go") && !strings.HasSuffix(f.Name(), "_test.go") {
-				goFiles = append(goFiles, f.Name())
+		err := filepath.Walk(absModulePath, func(p string, fi fs.FileInfo, err error) error {
+			if err != nil {
+				return err
 			}
+			if fi.IsDir() {
+				if strings.HasPrefix(fi.Name(), ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(fi.Name(), ".go") && !strings.HasSuffix(fi.Name(), "_test.go") {
+				rel, _ := filepath.Rel(absModulePath, p)
+				goFiles = append(goFiles, rel)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to walk module: %w", err)
 		}
 	} else {
 		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {

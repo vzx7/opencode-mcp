@@ -42,16 +42,16 @@ func NewMockProvider() *MockProvider {
 		model: "mock",
 		responses: map[string]map[string]string{
 			"architecture_review": {
-				"en": "Mock: Architecture review shows good layering with clear separation of concerns. Score: 85/100",
-				"ru": "Mock: Анализ архитектуры показывает хорошее разделение слоев и четкое разграничение ответственности. Оценка: 85/100",
+				"en": `{"score":85,"summary":"Architecture review: good layering with clear separation of concerns. Standard Go project structure detected.","issues":[{"severity":"low","message":"No pkg/ layer for shared utilities","location":"project root","suggestion":"Consider adding pkg/ for reusable packages"}],"recommendations":["Add integration tests","Document public APIs"]}`,
+				"ru": `{"score":85,"summary":"Анализ архитектуры: хорошее разделение слоев и четкое разграничение ответственности. Обнаружена стандартная структура Go-проекта.","issues":[{"severity":"low","message":"Отсутствует слой pkg/ для общих утилит","location":"корень проекта","suggestion":"Рассмотрите добавление pkg/ для переиспользуемых пакетов"}],"recommendations":["Добавить интеграционные тесты","Задокументировать публичные API"]}`,
 			},
 			"architecture_compliance": {
-				"en": "Mock: Architecture compliance check passed. All layers properly isolated.",
-				"ru": "Mock: Проверка соответствия архитектуре пройдена. Все слои правильно изолированы.",
+				"en": `{"score":90,"summary":"Architecture compliance check passed. All required layers are properly isolated.","issues":[],"recommendations":["Verify dependency direction between layers"]}`,
+				"ru": `{"score":90,"summary":"Проверка соответствия архитектуре пройдена. Все необходимые слои правильно изолированы.","issues":[],"recommendations":["Проверить направление зависимостей между слоями"]}`,
 			},
 			"module_audit": {
-				"en": "Mock: Module audit complete. Code quality is good with minor improvements suggested.",
-				"ru": "Mock: Аудит модуля завершен. Качество кода хорошее, предложены незначительные улучшения.",
+				"en": `{"score":80,"summary":"Module audit complete. Code quality is acceptable with minor improvements suggested.","issues":[{"severity":"low","message":"Missing unit tests","location":"module","suggestion":"Add table-driven tests for edge cases"}],"recommendations":["Increase test coverage","Add godoc comments to exported functions"]}`,
+				"ru": `{"score":80,"summary":"Аудит модуля завершен. Качество кода приемлемое, предложены незначительные улучшения.","issues":[{"severity":"low","message":"Отсутствуют юнит-тесты","location":"модуль","suggestion":"Добавить табличные тесты для граничных случаев"}],"recommendations":["Увеличить тестовое покрытие","Добавить godoc-комментарии к экспортируемым функциям"]}`,
 			},
 		},
 	}

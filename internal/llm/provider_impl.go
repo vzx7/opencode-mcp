@@ -150,13 +150,11 @@ func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 	var sb strings.Builder
 
 	systemLang := "You are a senior software architect performing an architecture review."
-	responseLang := "Return your response as a structured audit report in"
 	modulesLabel := "Modules:"
 	layersLabel := "Layers:"
 
 	if language == "ru" {
 		systemLang = "Вы - опытный архитектор программного обеспечения, выполняющий обзор архитектуры."
-		responseLang = "Верните ответ в виде структурированного отчета об аудите на"
 		modulesLabel = "Модули:"
 		layersLabel = "Слои:"
 	}
@@ -188,11 +186,8 @@ func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 	sb.WriteString("2. Coupling and cohesion analysis\n")
 	sb.WriteString("3. Maintainability assessment\n")
 	sb.WriteString("4. Scalability evaluation\n")
-	sb.WriteString("5. Issues and recommendations\n\n")
-	sb.WriteString(responseLang)
-	sb.WriteString(" ")
-	sb.WriteString(getLangLabel(language))
-	sb.WriteString(".")
+	sb.WriteString("5. Issues and recommendations\n")
+	appendJSONSchema(&sb, language)
 	return sb.String()
 }
 
@@ -203,6 +198,27 @@ func getLangLabel(lang string) string {
 	default:
 		return "English"
 	}
+}
+
+func appendJSONSchema(sb *strings.Builder, language string) {
+	instruction := "\n\nReturn ONLY a valid JSON object — no markdown fences, no explanation text. Schema:\n"
+	if language == "ru" {
+		instruction = "\n\nВерните ТОЛЬКО валидный JSON объект — без markdown-блоков, без пояснений. Схема:\n"
+	}
+	sb.WriteString(instruction)
+	sb.WriteString(`{
+  "score": <integer 0-100>,
+  "summary": "<overall assessment in ` + getLangLabel(language) + `>",
+  "issues": [
+    {
+      "severity": "<critical|high|medium|low>",
+      "message": "<issue description>",
+      "location": "<file or component>",
+      "suggestion": "<how to fix>"
+    }
+  ],
+  "recommendations": ["<actionable recommendation>"]
+}`)
 }
 
 func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, language string) string {
@@ -242,9 +258,7 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, lan
 	}
 	sb.WriteString("\n" + identifyViolations)
 	sb.WriteString("\n" + returnFormat)
-	sb.WriteString(" in ")
-	sb.WriteString(getLangLabel(language))
-	sb.WriteString(".")
+	appendJSONSchema(&sb, language)
 	return sb.String()
 }
 
@@ -271,8 +285,6 @@ func BuildModuleAuditPrompt(modulePath string, files map[string]string, language
 		sb.WriteString("\n```\n\n")
 	}
 	sb.WriteString(returnFormat)
-	sb.WriteString(" in ")
-	sb.WriteString(getLangLabel(language))
-	sb.WriteString(".")
+	appendJSONSchema(&sb, language)
 	return sb.String()
 }

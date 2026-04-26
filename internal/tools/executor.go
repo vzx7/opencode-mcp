@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -15,33 +16,57 @@ import (
 	"github.com/ai-mcp/code-auditor/internal/llm"
 )
 
+const (
+	defaultModelAnthropic = "claude-3-5-sonnet-20241022"
+	defaultModelOpenAI    = "gpt-4o"
+)
+
 type ToolExecutor struct {
 	defaultPath string
 	defaultLLM llm.LLMProvider
 	defaultLang string
 	apiKey    string
 	endpoint  string
-	mu       sync.RWMutex
-	debug    bool
-	logger   *log.Logger
+	mu        sync.RWMutex
+	debug     bool
+	logger    *log.Logger
 }
 
-func NewToolExecutor(defaultPath string, defaultLLM llm.LLMProvider, apiKey, endpoint, language string) *ToolExecutor {
-	if language == "" {
-		language = "en"
+type ToolExecutorConfig struct {
+	DefaultPath string
+	LLM       llm.LLMProvider
+	APIKey    string
+	Endpoint  string
+	Language  string
+	Debug    bool
+	Logger   *log.Logger
+}
+
+func NewToolExecutor(cfg ToolExecutorConfig) *ToolExecutor {
+	if cfg.Language == "" {
+		cfg.Language = "en"
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = log.New(os.Stdout, "[TOOL] ", log.LstdFlags)
 	}
 	return &ToolExecutor{
-		defaultPath: defaultPath,
-		defaultLLM: defaultLLM,
-		defaultLang: language,
-		apiKey:    apiKey,
-		endpoint:  endpoint,
+		defaultPath: cfg.DefaultPath,
+		defaultLLM: cfg.LLM,
+		defaultLang: cfg.Language,
+		apiKey:     cfg.APIKey,
+		endpoint:   cfg.Endpoint,
+		debug:     cfg.Debug,
+		logger:    cfg.Logger,
 	}
 }
 
 func (te *ToolExecutor) SetDebug(debug bool) {
+	te.mu.Lock()
+	defer te.mu.Unlock()
 	te.debug = debug
-	te.logger = log.New(os.Stdout, "[TOOL] ", log.LstdFlags)
+	if debug && te.logger == nil {
+		te.logger = log.New(os.Stdout, "[TOOL] ", log.LstdFlags)
+	}
 }
 
 type ToolInput struct {
@@ -52,9 +77,9 @@ type ToolInput struct {
 	Language    string `json:"language,omitempty"`
 }
 
-func (te *ToolExecutor) getLLM(provider, model string) llm.LLMProvider {
+func (te *ToolExecutor) getLLM(provider, model string) (llm.LLMProvider, error) {
 	if provider == "" && model == "" {
-		return te.defaultLLM
+		return te.defaultLLM, nil
 	}
 
 	p := provider
@@ -66,17 +91,17 @@ func (te *ToolExecutor) getLLM(provider, model string) llm.LLMProvider {
 	if m == "" {
 		switch te.defaultLLM.Name() {
 		case "anthropic":
-			m = "claude-3-5-sonnet-20241022"
+			m = defaultModelAnthropic
 		default:
-			m = "gpt-4o"
+			m = defaultModelOpenAI
 		}
 	}
 
 	newLLM, err := llm.NewProvider(p, te.apiKey, te.endpoint, m)
 	if err != nil {
-		return te.defaultLLM
+		return te.defaultLLM, fmt.Errorf("failed to create LLM provider: %w", err)
 	}
-	return newLLM
+	return newLLM, nil
 }
 
 func (te *ToolExecutor) getLanguage(language string) string {
@@ -105,23 +130,31 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("failed to build project map: %w", err)
 	}
 
-	llmProvider := te.getLLM(input.Provider, input.LLM)
+	llmProvider, err := te.getLLM(input.Provider, input.LLM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM: %w", err)
+	}
 	language := te.getLanguage(input.Language)
 	prompt := llm.BuildReviewPrompt(pm, language)
 
-	if te.debug {
-		te.logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
+	te.mu.RLock()
+	debug := te.debug
+	logger := te.logger
+	te.mu.RUnlock()
+
+	if debug {
+		logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 	}
 
 	llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 	if err != nil {
-		if te.debug {
-			te.logger.Printf("<<< LLM Error: %v", err)
+		if debug {
+			logger.Printf("<<< LLM Error: %v", err)
 		}
 		return nil, fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	if te.debug {
+	if debug {
 		te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 	}
 
@@ -131,13 +164,47 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 	return report, nil
 }
 
-func (te *ToolExecutor) buildReportFromLLM(response string) *domain.AuditReport {
-	return &domain.AuditReport{
-		Score:          85,
-		Summary:        response,
-		Issues:        []domain.Issue{},
-		Recommendations: []string{"Review detailed analysis above"},
+// parseLLMResponse tries to unmarshal LLM JSON output into AuditReport.
+// Falls back to a summary-only report if parsing fails.
+func parseLLMResponse(response string) *domain.AuditReport {
+	s := strings.TrimSpace(response)
+	// Strip optional ```json … ``` fences
+	if i := strings.Index(s, "```json"); i != -1 {
+		s = s[i+7:]
+		if j := strings.Index(s, "```"); j != -1 {
+			s = s[:j]
+		}
+		s = strings.TrimSpace(s)
 	}
+	// Find outermost JSON object
+	if i := strings.Index(s, "{"); i != -1 {
+		if j := strings.LastIndex(s, "}"); j > i {
+			s = s[i : j+1]
+		}
+	}
+
+	var report domain.AuditReport
+	if err := json.Unmarshal([]byte(s), &report); err == nil && report.Summary != "" {
+		if report.Issues == nil {
+			report.Issues = []domain.Issue{}
+		}
+		if report.Recommendations == nil {
+			report.Recommendations = []string{}
+		}
+		return &report
+	}
+
+	// Fallback: raw text in summary, neutral score
+	return &domain.AuditReport{
+		Score:           75,
+		Summary:         response,
+		Issues:          []domain.Issue{},
+		Recommendations: []string{},
+	}
+}
+
+func (te *ToolExecutor) buildReportFromLLM(response string) *domain.AuditReport {
+	return parseLLMResponse(response)
 }
 
 func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *domain.ProjectMap) {
@@ -218,21 +285,32 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 
 	report := analyzerEngine.CheckCompliance(rules, pm)
 
-	llmProvider := te.getLLM(input.Provider, input.LLM)
+	llmProvider, err := te.getLLM(input.Provider, input.LLM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM: %w", err)
+	}
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
 		prompt := llm.BuildCompliancePrompt(rules, pm, language)
 
-		if te.debug {
-			te.logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
+		te.mu.RLock()
+		debug := te.debug
+		logger := te.logger
+		te.mu.RUnlock()
+
+		if debug {
+			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
-			if te.debug {
-				te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+			if debug {
+				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 			}
-			report.Summary = llmResponse
+			llmReport := parseLLMResponse(llmResponse)
+			report.Summary = llmReport.Summary
+			report.Issues = append(report.Issues, llmReport.Issues...)
+			report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
 		}
 	}
 
@@ -280,21 +358,33 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 		return nil, fmt.Errorf("failed to read module content: %w", err)
 	}
 
-	llmProvider := te.getLLM(input.Provider, input.LLM)
+	llmProvider, err := te.getLLM(input.Provider, input.LLM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM: %w", err)
+	}
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
 		prompt := llm.BuildModuleAuditPrompt(modulePath, moduleContent, language)
 
-		if te.debug {
-			te.logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
+		te.mu.RLock()
+		debug := te.debug
+		logger := te.logger
+		te.mu.RUnlock()
+
+		if debug {
+			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
-			if te.debug {
-				te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+			if debug {
+				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 			}
-			report.Summary = llmResponse
+			llmReport := parseLLMResponse(llmResponse)
+			report.Score = llmReport.Score
+			report.Summary = llmReport.Summary
+			report.Issues = append(report.Issues, llmReport.Issues...)
+			report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
 		}
 	}
 
