@@ -32,12 +32,13 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PROVIDER` | LLM provider (`mock`, `openai`, `anthropic`, or OpenAI-compatible) | `mock` |
+| `PROVIDER` | LLM provider (`mock`, `openai`, or OpenAI-compatible) | `mock` |
 | `LLM` | Model | `gpt-4o` |
 | `API_KEY` | API key | - |
 | `ENDPOINT` | Custom endpoint | - |
 | `PROJECT` | Project path | current directory |
 | `PORT` | Port | `8080` |
+| `LANGUAGE` | Response language (`ru`, `en`) | `ru` |
 
 ### .env Examples
 
@@ -55,18 +56,50 @@ LLM=gpt-4o
 API_KEY=sk-...
 ```
 
-**Anthropic:**
+**Anthropic** *(not yet implemented — falls back to mock)*:
 ```env
 PROVIDER=anthropic
 LLM=claude-3-5-sonnet-20241022
 API_KEY=sk-ant-...
 ```
 
-### CLI arguments override .env
+### CLI flags
+
+All flags override the corresponding `.env` values:
+
+```
+-stdio         Run in stdio mode for MCP clients (Claude Desktop, Cursor, etc.)
+-provider      LLM provider (overrides PROVIDER)
+-llm           Model name (overrides LLM)
+-api-key       API key (overrides API_KEY)
+-endpoint      Custom endpoint (overrides ENDPOINT)
+-port          Port (overrides PORT)
+-project       Project path (overrides PROJECT)
+-debug-dir     Debug output directory (default: <project>/debug)
+-debug         Enable verbose logging
+```
+
+**Examples:**
+```bash
+# HTTP mode
+go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
+
+# stdio mode for MCP clients
+go run ./cmd -stdio -provider openai -llm gpt-4o -project /path/to/project
+
+# Custom debug output directory
+go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
+```
+
+### Debug mode
+
+Run with `-debug` for verbose logging of LLM requests, responses, and file saves:
 
 ```bash
-go run ./cmd --provider openai --llm gpt-4o-mini
+go run ./cmd -debug -project /path/to/project
 ```
+
+By default, reports are saved to `<project>/debug/` as both `.md` and `.json` files.
 
 ---
 
@@ -115,8 +148,9 @@ Analyzes the project as a system, identifies architectural issues.
 
 **Parameters:**
 - `project_path` (string, optional) - path to project
-- `provider` (string, optional) - LLM provider (mock, openai, anthropic)
-- `llm` (string, optional) - model (gpt-4o, claude-3-5-sonnet-20241022)
+- `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
+- `llm` (string, optional) - model (e.g. `gpt-4o`)
+- `language` (string, optional) - response language (`ru`, `en`)
 
 **Example call:**
 ```json
@@ -129,7 +163,8 @@ Analyzes the project as a system, identifies architectural issues.
     "arguments": {
       "project_path": "/path/to/my-project",
       "provider": "openai",
-      "llm": "gpt-4o"
+      "llm": "gpt-4o",
+      "language": "en"
     }
   }
 }
@@ -140,20 +175,28 @@ Analyzes the project as a system, identifies architectural issues.
 /architecture-review project_path=/path/to/project provider=openai llm=gpt-4o
 ```
 
-**Response:**
+**Response:** the tool returns a markdown-formatted report as MCP content text. Two files are also saved to the debug directory:
+- `architecture_review_<timestamp>.md` — human-readable report
+- `architecture_review_<timestamp>.json` — structured report for AI agents:
+
 ```json
 {
-  "score": 85,
-  "summary": "...",
-  "issues": [
-    {
-      "severity": "medium",
-      "message": "Limited architecture layers detected",
-      "location": "/path/to/project",
-      "suggestion": "Consider adopting layered architecture"
-    }
-  ],
-  "recommendations": ["Add cmd/ for entrypoints"]
+  "tool": "architecture_review",
+  "timestamp": "2026-04-26T22:42:57+03:00",
+  "project": "/path/to/project",
+  "report": {
+    "score": 85,
+    "summary": "...",
+    "issues": [
+      {
+        "severity": "medium",
+        "message": "Limited architecture layers detected",
+        "location": "/path/to/project",
+        "suggestion": "Consider adopting layered architecture"
+      }
+    ],
+    "recommendations": ["Add cmd/ for entrypoints"]
+  }
 }
 ```
 
@@ -163,9 +206,10 @@ Checks project compliance against target architecture.
 
 **Parameters:**
 - `project_path` (string, optional) - path to project
-- `provider` (string, optional) - LLM provider
+- `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
 - `llm` (string, optional) - model
 - `target_architecture` (object, optional) - architecture rules
+- `language` (string, optional) - response language (`ru`, `en`)
 
 **target_architecture format:**
 ```json
@@ -222,10 +266,11 @@ Checks project compliance against target architecture.
 Audits an individual file or module.
 
 **Parameters:**
-- `module_path` (string, optional) - path to module
-- `project_path` (string, optional) - path to project
-- `provider` (string, optional) - LLM provider
+- `module_path` (string, optional) - path to file or module
+- `project_path` (string, optional) - path to project root
+- `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
 - `llm` (string, optional) - model
+- `language` (string, optional) - response language (`ru`, `en`)
 
 **Example call:**
 ```json
@@ -252,13 +297,13 @@ Audits an individual file or module.
 ### Provider and Model Selection Priority
 
 1. **Tool call arguments** (highest priority):
-   - `provider=openai llm=gpt-4o` - dynamic for each call
+   - `provider=openai llm=gpt-4o` — dynamic per call
 
-2. **.env file**:
-   - `PROVIDER=...`, `LLM=...` - default for all calls
+2. **CLI flags at startup**:
+   - `-provider=... -llm=...` — override `.env`
 
-3. **CLI arguments when starting server**:
-   - `--provider=... --llm=...` - overrides .env
+3. **`.env` file**:
+   - `PROVIDER=...`, `LLM=...` — default for all calls
 
 4. **Hardcoded defaults** (lowest priority):
    - Provider: `mock`, Model: `gpt-4o`

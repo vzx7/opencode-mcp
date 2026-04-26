@@ -27,12 +27,13 @@ cp .env.example .env
 
 | Переменная | Описание                                                              | По умолчанию       |
 | ------------| -----------------------------------------------------------------------| --------------------|
-| `PROVIDER` | LLM провайдер (`mock`, `openai`, `anthropic`, или OpenAI-совместимый) | `mock`             |
+| `PROVIDER` | LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)              | `mock`             |
 | `LLM`      | Модель                                                                | `gpt-4o`           |
 | `API_KEY`  | API ключ                                                              | -                  |
 | `ENDPOINT` | Кастомный endpoint                                                    | -                  |
 | `PROJECT`  | Путь к проекту                                                        | текущая директория |
 | `PORT`     | Порт                                                                  | `8080`             |
+| `LANGUAGE` | Язык ответов (`ru`, `en`)                                             | `ru`               |
 
 ### Примеры .env
 
@@ -50,18 +51,50 @@ LLM=gpt-4o
 API_KEY=sk-...
 ```
 
-**Anthropic:**
+**Anthropic** *(не реализован — используется mock)*:
 ```env
 PROVIDER=anthropic
 LLM=claude-3-5-sonnet-20241022
 API_KEY=sk-ant-...
 ```
 
-### CLI аргументы переопределяют .env
+### CLI флаги
+
+Все флаги переопределяют соответствующие значения из `.env`:
+
+```
+-stdio         Запуск в stdio режиме для MCP клиентов (Claude Desktop, Cursor и др.)
+-provider      LLM провайдер (переопределяет PROVIDER)
+-llm           Модель (переопределяет LLM)
+-api-key       API ключ (переопределяет API_KEY)
+-endpoint      Кастомный endpoint (переопределяет ENDPOINT)
+-port          Порт (переопределяет PORT)
+-project       Путь к проекту (переопределяет PROJECT)
+-debug-dir     Директория для отчётов (по умолчанию: <project>/debug)
+-debug         Подробное логирование
+```
+
+**Примеры:**
+```bash
+# HTTP режим
+go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
+
+# stdio режим для MCP клиентов
+go run ./cmd -stdio -provider openai -llm gpt-4o -project /path/to/project
+
+# Своя директория для отчётов
+go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
+```
+
+### Debug режим
+
+Запустите с флагом `-debug` для подробного логирования запросов к LLM, ответов и сохранения файлов:
 
 ```bash
-go run ./cmd --provider openai --llm gpt-4o-mini
+go run ./cmd -debug -project /path/to/project
 ```
+
+По умолчанию отчёты сохраняются в `<project>/debug/` в виде файлов `.md` и `.json`.
 
 ---
 
@@ -110,8 +143,9 @@ go run ./cmd
 
 **Параметры:**
 - `project_path` (string, опционально) - путь к проекту
-- `provider` (string, опционально) - LLM провайдер (mock, openai, anthropic)
-- `llm` (string, опционально) - модель (gpt-4o, claude-3-5-sonnet-20241022)
+- `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
+- `llm` (string, опционально) - модель (например `gpt-4o`)
+- `language` (string, опционально) - язык ответа (`ru`, `en`)
 
 **Пример вызова:**
 ```json
@@ -124,7 +158,8 @@ go run ./cmd
     "arguments": {
       "project_path": "/path/to/my-project",
       "provider": "openai",
-      "llm": "gpt-4o"
+      "llm": "gpt-4o",
+      "language": "en"
     }
   }
 }
@@ -135,20 +170,28 @@ go run ./cmd
 /architecture-review project_path=/path/to/project provider=openai llm=gpt-4o
 ```
 
-**Ответ:**
+**Ответ:** инструмент возвращает отчёт в формате Markdown в виде MCP content text. В директорию debug также сохраняются два файла:
+- `architecture_review_<timestamp>.md` — читаемый отчёт
+- `architecture_review_<timestamp>.json` — структурированный отчёт для AI-агентов:
+
 ```json
 {
-  "score": 85,
-  "summary": "...",
-  "issues": [
-    {
-      "severity": "medium",
-      "message": "Limited architecture layers detected",
-      "location": "/path/to/project",
-      "suggestion": "Consider adopting layered architecture"
-    }
-  ],
-  "recommendations": ["Add cmd/ for entrypoints"]
+  "tool": "architecture_review",
+  "timestamp": "2026-04-26T22:42:57+03:00",
+  "project": "/path/to/project",
+  "report": {
+    "score": 85,
+    "summary": "...",
+    "issues": [
+      {
+        "severity": "medium",
+        "message": "Limited architecture layers detected",
+        "location": "/path/to/project",
+        "suggestion": "Consider adopting layered architecture"
+      }
+    ],
+    "recommendations": ["Add cmd/ for entrypoints"]
+  }
 }
 ```
 
@@ -158,9 +201,10 @@ go run ./cmd
 
 **Параметры:**
 - `project_path` (string, опционально) - путь к проекту
-- `provider` (string, опционально) - LLM провайдер
+- `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
 - `llm` (string, опционально) - модель
 - `target_architecture` (object, опционально) - правила архитектуры
+- `language` (string, опционально) - язык ответа (`ru`, `en`)
 
 **target_architecture формат:**
 ```json
@@ -217,10 +261,11 @@ go run ./cmd
 Аудитирует отдельный файл или модуль.
 
 **Параметры:**
-- `module_path` (string, опционально) - путь к модулю
-- `project_path` (string, опционально) - путь к проекту
-- `provider` (string, опционально) - LLM провайдер
+- `module_path` (string, опционально) - путь к файлу или модулю
+- `project_path` (string, опционально) - путь к корню проекта
+- `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
 - `llm` (string, опционально) - модель
+- `language` (string, опционально) - язык ответа (`ru`, `en`)
 
 **При��ер вызова:**
 ```json
@@ -247,13 +292,13 @@ go run ./cmd
 ### Приоритет выбора провайдера и модели
 
 1. **Аргументы при вызове tool** (самый высокий приоритет):
-   - `provider=openai llm=gpt-4o` - динамически для каждого вызова
+   - `provider=openai llm=gpt-4o` — динамически для каждого вызова
 
-2. **.env файл**:
-   - `PROVIDER=...`, `LLM=...` - default для всех вызовов
+2. **CLI флаги при запуске сервера**:
+   - `-provider=... -llm=...` — переопределяют `.env`
 
-3. **CLI аргументы при запуске сервера**:
-   - `--provider=... --llm=...` - переопределяет .env
+3. **`.env` файл**:
+   - `PROVIDER=...`, `LLM=...` — default для всех вызовов
 
 4. **Hardcoded defaults** (самый низкий приоритет):
    - Provider: `mock`, Model: `gpt-4o`
