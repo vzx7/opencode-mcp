@@ -2,6 +2,11 @@
 
 MCP server for AI assistants, providing code architecture audit and review tools.
 
+## Translations
+
+- [Русский](docs/README.ru.md)
+- [中文](docs/README.zh.md)
+
 ## Features
 
 The server provides 3 MCP tools:
