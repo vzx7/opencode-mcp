@@ -297,9 +297,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 		}
 
 		resultStr := s.formatReport(report)
-
-		// ✅ FIX: always save FULL report, not Summary
-		s.persistReport(toolName, resultStr)
+		s.persistReport(toolName, resultStr, input.ProjectPath)
 
 		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: resultStr}}}
 
@@ -332,7 +330,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 		}
 
 		resultStr := s.formatReport(report)
-		s.persistReport(toolName, resultStr)
+		s.persistReport(toolName, resultStr, input.ProjectPath)
 
 		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: resultStr}}}
 
@@ -364,7 +362,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 		}
 
 		resultStr := s.formatReport(report)
-		s.persistReport(toolName, resultStr)
+		s.persistReport(toolName, resultStr, input.ProjectPath)
 
 		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: resultStr}}}
 
@@ -379,10 +377,24 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 	return result
 }
 
-// ✅ NEW: centralized persistence
-func (s *Server) persistReport(toolName string, content string) {
-	if s.debugDir == "" {
-		s.logger.Printf("[WARN] debugDir is empty, skipping file save")
+func (s *Server) resolveDebugDir(projectPath string) string {
+	if s.debugDir != "" {
+		return s.debugDir
+	}
+	if projectPath != "" {
+		return filepath.Join(projectPath, "debug")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(cwd, "debug")
+}
+
+func (s *Server) persistReport(toolName string, content string, projectPath string) {
+	dir := s.resolveDebugDir(projectPath)
+	if dir == "" {
+		s.logger.Printf("[WARN] cannot resolve debug dir, skipping file save")
 		return
 	}
 
@@ -391,40 +403,91 @@ func (s *Server) persistReport(toolName string, content string) {
 		return
 	}
 
-	filename := fmt.Sprintf("%s_%s_%04d.md",
-		toolName,
-		time.Now().Format("20060102_150405"),
-		rand.Intn(9999),
-	)
-
-	path := filepath.Join(s.debugDir, filename)
-
-	header := fmt.Sprintf("# %s\n\n", strings.ToUpper(toolName)) +
-		fmt.Sprintf("**Time:** %s\n\n", time.Now().Format("2006-01-02 15:04:05")) +
-		fmt.Sprintf("**Project:** %s\n\n", s.defaultPath) +
-		"---\n\n"
-
-	output := header + content
-
-	// ensure dir exists (extra safety)
-	if err := os.MkdirAll(s.debugDir, 0755); err != nil {
-		s.logger.Printf("[ERROR] failed to ensure debug dir: %v", err)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		s.logger.Printf("[ERROR] failed to create debug dir %s: %v", dir, err)
 		return
 	}
 
-	if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+	filename := fmt.Sprintf("%s_%s_%d.md",
+		toolName,
+		time.Now().Format("20060102_150405"),
+		time.Now().UnixNano()%10000,
+	)
+	path := filepath.Join(dir, filename)
+
+	header := fmt.Sprintf("# %s\n\n", strings.ToUpper(toolName)) +
+		fmt.Sprintf("**Time:** %s\n\n", time.Now().Format("2006-01-02 15:04:05")) +
+		fmt.Sprintf("**Project:** %s\n\n", projectPath) +
+		"---\n\n"
+
+	if err := os.WriteFile(path, []byte(header+content), 0644); err != nil {
 		s.logger.Printf("[ERROR] failed to write file: %v", err)
 		return
 	}
 
-	// ALWAYS log path (not only debug)
 	s.logger.Printf("[OK] report saved: %s", path)
 }
 
 
 func (s *Server) formatReport(report *domain.AuditReport) string {
-	data, _ := json.MarshalIndent(report, "", "  ")
-	return string(data)
+	var b strings.Builder
+
+	scoreLabel := "LOW"
+	switch {
+	case report.Score >= 80:
+		scoreLabel = "HIGH"
+	case report.Score >= 60:
+		scoreLabel = "MEDIUM"
+	}
+	b.WriteString(fmt.Sprintf("## Score: %d / 100  [%s]\n\n", report.Score, scoreLabel))
+
+	if report.Summary != "" {
+		b.WriteString("## Summary\n\n")
+		b.WriteString(report.Summary)
+		b.WriteString("\n\n")
+	}
+
+	if len(report.Issues) > 0 {
+		bySeverity := map[domain.Severity][]domain.Issue{}
+		order := []domain.Severity{
+			domain.SeverityCritical,
+			domain.SeverityHigh,
+			domain.SeverityMedium,
+			domain.SeverityLow,
+		}
+		for _, issue := range report.Issues {
+			bySeverity[issue.Severity] = append(bySeverity[issue.Severity], issue)
+		}
+
+		b.WriteString(fmt.Sprintf("## Issues (%d)\n\n", len(report.Issues)))
+		for _, sev := range order {
+			issues, ok := bySeverity[sev]
+			if !ok {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("### %s\n\n", strings.ToUpper(string(sev))))
+			for _, issue := range issues {
+				b.WriteString(fmt.Sprintf("- **%s**", issue.Message))
+				if issue.Location != "" {
+					b.WriteString(fmt.Sprintf("  \n  Location: `%s`", issue.Location))
+				}
+				if issue.Suggestion != "" {
+					b.WriteString(fmt.Sprintf("  \n  Suggestion: %s", issue.Suggestion))
+				}
+				b.WriteString("\n\n")
+			}
+		}
+	}
+
+	if len(report.Recommendations) > 0 {
+		b.WriteString("## Recommendations\n\n")
+		for _, r := range report.Recommendations {
+			b.WriteString(fmt.Sprintf("- %s\n", r))
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
 
 func (s *Server) saveDebugResponse(toolName string, content string) {
