@@ -17,19 +17,21 @@ import (
 )
 
 type Server struct {
-	executor *tools.ToolExecutor
+	executor  *tools.ToolExecutor
 	defaultPath string
-	llm      llm.LLMProvider
-	logger   *log.Logger
+	llm       llm.LLMProvider
+	logger    *log.Logger
+	language  string
 }
 
 type Config struct {
 	ProjectPath string
-	Provider   string
-	LLM        string
-	APIKey     string
-	Endpoint   string
-	Port       string
+	Provider    string
+	LLM         string
+	APIKey      string
+	Endpoint    string
+	Port        string
+	Language    string
 }
 
 func NewServer(cfg Config) *Server {
@@ -45,13 +47,14 @@ func NewServer(cfg Config) *Server {
 		llmProvider = llm.NewMockProvider()
 	}
 
-	executor := tools.NewToolExecutor(cfg.ProjectPath, llmProvider)
+	executor := tools.NewToolExecutor(cfg.ProjectPath, llmProvider, cfg.APIKey, cfg.Endpoint, cfg.Language)
 
 	return &Server{
-		executor:   executor,
+		executor:    executor,
 		defaultPath: cfg.ProjectPath,
-		llm:        llmProvider,
-		logger:     log.New(os.Stdout, "[MCP] ", log.LstdFlags),
+		llm:         llmProvider,
+		logger:      log.New(os.Stdout, "[MCP] ", log.LstdFlags),
+		language:    cfg.Language,
 	}
 }
 
@@ -137,6 +140,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 							Type:        "string",
 							Description: "Модель (например, gpt-4o, claude-3-5-sonnet-20241022)",
 						},
+						"language": {
+							Type:        "string",
+							Description: "Язык ответа (ru, en)",
+						},
 					},
 				},
 			},
@@ -161,6 +168,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 						"target_architecture": {
 							Type:        "object",
 							Description: "Описание целевой архитектуры (rules / constraints)",
+						},
+						"language": {
+							Type:        "string",
+							Description: "Язык ответа (ru, en)",
 						},
 					},
 				},
@@ -187,6 +198,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 							Type:        "string",
 							Description: "Модель (например, gpt-4o, claude-3-5-sonnet-20241022)",
 						},
+						"language": {
+							Type:        "string",
+							Description: "Язык ответа (ru, en)",
+						},
 					},
 				},
 			},
@@ -208,6 +223,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 	switch toolName {
 	case "architecture_review":
 		input := tools.ArchitectureReviewInput{ToolInput: tools.ToolInput{ProjectPath: "."}}
+		input.Language = s.language
 		if arguments != nil {
 			if pp, ok := arguments["project_path"].(string); ok {
 				input.ProjectPath = pp
@@ -218,6 +234,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 			if m, ok := arguments["llm"].(string); ok {
 				input.LLM = m
 			}
+			if l, ok := arguments["language"].(string); ok {
+				input.Language = l
+			}
 		}
 		report, err := s.executor.ArchitectureReview(ctx, input)
 		if err != nil {
@@ -227,6 +246,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 
 	case "architecture_compliance_check":
 		input := tools.ArchitectureComplianceInput{ToolInput: tools.ToolInput{ProjectPath: "."}}
+		input.Language = s.language
 		if arguments != nil {
 			if pp, ok := arguments["project_path"].(string); ok {
 				input.ProjectPath = pp
@@ -241,6 +261,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 				taJSON, _ := json.Marshal(ta)
 				json.Unmarshal(taJSON, &input.TargetArchitecture)
 			}
+			if l, ok := arguments["language"].(string); ok {
+				input.Language = l
+			}
 		}
 		report, err := s.executor.ArchitectureComplianceCheck(ctx, input)
 		if err != nil {
@@ -250,9 +273,10 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 
 	case "module_audit":
 		input := tools.ModuleAuditInput{ToolInput: tools.ToolInput{ProjectPath: "."}}
+		input.Language = s.language
 		if arguments != nil {
 			if mp, ok := arguments["module_path"].(string); ok {
-				input.ProjectPath = mp
+				input.ModulePath = mp
 			}
 			if pp, ok := arguments["project_path"].(string); ok {
 				input.ProjectPath = pp
@@ -262,6 +286,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 			}
 			if m, ok := arguments["llm"].(string); ok {
 				input.LLM = m
+			}
+			if l, ok := arguments["language"].(string); ok {
+				input.Language = l
 			}
 		}
 		report, err := s.executor.ModuleAudit(ctx, input)
@@ -315,6 +342,59 @@ func (s *Server) Start(port string) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	s.logger.Println("Shutting down...")
+}
+
+func (s *Server) StartStdio() {
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+
+	for {
+		var req JSONRPCRequest
+		if err := decoder.Decode(&req); err != nil {
+			if err == io.EOF {
+				return
+			}
+			s.logger.Printf("Read error: %v", err)
+			return
+		}
+
+		ctx := context.Background()
+		var resp interface{}
+
+		switch req.Method {
+		case "initialize":
+			resp = s.handleInitialize(req)
+		case "tools/list":
+			resp = s.handleToolsList(req)
+		case "tools/call":
+			resp = s.handleToolsCall(ctx, req)
+		default:
+			s.sendErrorStdio(encoder, &req, fmt.Sprintf("method not found: %s", req.Method))
+			continue
+		}
+
+		jsonResp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  resp,
+		}
+		encoder.Encode(jsonResp)
+	}
+}
+
+func (s *Server) sendErrorStdio(encoder *json.Encoder, req *JSONRPCRequest, message string) {
+	var id interface{}
+	if req != nil {
+		id = req.ID
+	}
+	encoder.Encode(JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error: &JSONRPCError{
+			Code:    -32603,
+			Message: message,
+		},
+	})
 }
 
 type JSONRPCRequest struct {

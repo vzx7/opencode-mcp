@@ -2,8 +2,11 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/ai-mcp/code-auditor/internal/analyzer"
@@ -12,22 +15,33 @@ import (
 )
 
 type ToolExecutor struct {
-	defaultPath string
-	defaultLLM  llm.LLMProvider
-	mu          sync.RWMutex
+	defaultPath   string
+	defaultLLM    llm.LLMProvider
+	defaultLang   string
+	apiKey        string
+	endpoint      string
+	mu            sync.RWMutex
 }
 
-func NewToolExecutor(defaultPath string, defaultLLM llm.LLMProvider) *ToolExecutor {
+func NewToolExecutor(defaultPath string, defaultLLM llm.LLMProvider, apiKey, endpoint, language string) *ToolExecutor {
+	if language == "" {
+		language = "en"
+	}
 	return &ToolExecutor{
 		defaultPath: defaultPath,
 		defaultLLM:  defaultLLM,
+		defaultLang: language,
+		apiKey:      apiKey,
+		endpoint:    endpoint,
 	}
 }
 
 type ToolInput struct {
 	ProjectPath string `json:"project_path"`
-	Provider  string `json:"provider"`
-	LLM      string `json:"llm"`
+	ModulePath  string `json:"module_path,omitempty"`
+	Provider    string `json:"provider"`
+	LLM         string `json:"llm"`
+	Language    string `json:"language,omitempty"`
 }
 
 func (te *ToolExecutor) getLLM(provider, model string) llm.LLMProvider {
@@ -50,11 +64,18 @@ func (te *ToolExecutor) getLLM(provider, model string) llm.LLMProvider {
 		}
 	}
 
-	newLLM, err := llm.NewProvider(p, "", "", m)
+	newLLM, err := llm.NewProvider(p, te.apiKey, te.endpoint, m)
 	if err != nil {
 		return te.defaultLLM
 	}
 	return newLLM
+}
+
+func (te *ToolExecutor) getLanguage(language string) string {
+	if language != "" {
+		return language
+	}
+	return te.defaultLang
 }
 
 type ArchitectureReviewInput struct {
@@ -77,8 +98,9 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 	}
 
 	llmProvider := te.getLLM(input.Provider, input.LLM)
-	prompt := llm.BuildReviewPrompt(pm)
-	llmResponse, err := llmProvider.Complete(ctx, prompt)
+	language := te.getLanguage(input.Language)
+	prompt := llm.BuildReviewPrompt(pm, language)
+	llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 	if err != nil {
 		return nil, fmt.Errorf("LLM call failed: %w", err)
 	}
@@ -177,9 +199,10 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 	report := analyzerEngine.CheckCompliance(rules, pm)
 
 	llmProvider := te.getLLM(input.Provider, input.LLM)
+	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
-		prompt := llm.BuildCompliancePrompt(rules, pm)
-		llmResponse, err := llmProvider.Complete(ctx, prompt)
+		prompt := llm.BuildCompliancePrompt(rules, pm, language)
+		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
 			report.Summary = llmResponse
 		}
@@ -205,25 +228,35 @@ type ModuleAuditInput struct {
 }
 
 func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput) (*domain.AuditReport, error) {
-	modulePath := input.ProjectPath
-	if modulePath == "" {
-		modulePath = te.defaultPath
+	projectPath := input.ProjectPath
+	if projectPath == "" {
+		projectPath = te.defaultPath
 	}
-	if modulePath == "" {
-		modulePath = "."
+	if projectPath == "" {
+		projectPath = "."
 	}
 
-	analyzerEngine := analyzer.New(modulePath)
-	report, err := analyzerEngine.AuditModule(modulePath)
+	modulePath := input.ModulePath
+	if modulePath == "" {
+		modulePath = projectPath
+	}
+
+	analyzerEngine := analyzer.New(projectPath)
+	report, err := analyzerEngine.AuditModule(modulePath, projectPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to audit module: %w", err)
 	}
 
+	moduleContent, err := te.readModuleContent(modulePath, projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read module content: %w", err)
+	}
+
 	llmProvider := te.getLLM(input.Provider, input.LLM)
+	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
-		files, _ := json.Marshal(pm{Files: []string{modulePath}})
-		prompt := llm.BuildModuleAuditPrompt(modulePath, []string{string(files)})
-		llmResponse, err := llmProvider.Complete(ctx, prompt)
+		prompt := llm.BuildModuleAuditPrompt(modulePath, moduleContent, language)
+		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
 			report.Summary = llmResponse
 		}
@@ -232,6 +265,52 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 	return report, nil
 }
 
-type pm struct {
-	Files []string `json:"files"`
+func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string) (map[string]string, error) {
+	content := make(map[string]string)
+
+	absModulePath := modulePath
+	if !filepath.IsAbs(modulePath) {
+		absModulePath = filepath.Join(projectRoot, modulePath)
+	}
+	absModulePath, _ = filepath.Abs(absModulePath)
+
+	info, err := os.Stat(absModulePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.IsDir() {
+		err := filepath.Walk(absModulePath, func(path string, info fs.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				if strings.HasPrefix(info.Name(), ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+				relPath, _ := filepath.Rel(projectRoot, path)
+				data, err := os.ReadFile(path)
+				if err == nil {
+					content[relPath] = string(data)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+			relPath, _ := filepath.Rel(projectRoot, absModulePath)
+			data, err := os.ReadFile(absModulePath)
+			if err == nil {
+				content[relPath] = string(data)
+			}
+		}
+	}
+
+	return content, nil
 }

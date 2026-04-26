@@ -25,14 +25,14 @@ cp .env.example .env
 
 ### Параметры .env
 
-| Переменная | Описание | По умолчанию |
-|------------|-----------|--------------|
-| `PROVIDER` | LLM провайдер (`mock`, `openai`, `anthropic`) | `mock` |
-| `LLM` | Модель | `gpt-4o` |
-| `API_KEY` | API ключ | - |
-| `ENDPOINT` | Кастомный endpoint | - |
-| `PROJECT` | Путь к проекту | текущая директория |
-| `PORT` | Порт | `8080` |
+| Переменная | Описание                                                              | По умолчанию       |
+| ------------| -----------------------------------------------------------------------| --------------------|
+| `PROVIDER` | LLM провайдер (`mock`, `openai`, `anthropic`, или OpenAI-совместимый) | `mock`             |
+| `LLM`      | Модель                                                                | `gpt-4o`           |
+| `API_KEY`  | API ключ                                                              | -                  |
+| `ENDPOINT` | Кастомный endpoint                                                    | -                  |
+| `PROJECT`  | Путь к проекту                                                        | текущая директория |
+| `PORT`     | Порт                                                                  | `8080`             |
 
 ### Примеры .env
 
@@ -81,11 +81,12 @@ go run ./cmd
 
 ```json
 {
-  "mcpServers": {
-    "code-auditor": {
-      "command": "go",
-      "args": ["/path/to/ai-mcp/cmd"],
-      "env": {}
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mcp_custom": {
+      "type": "remote",
+      "url": "localhost:8080",
+      "enabled": true
     }
   }
 }

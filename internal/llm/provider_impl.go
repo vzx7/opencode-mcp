@@ -1,16 +1,21 @@
 package llm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type OpenAIProvider struct {
 	apiKey   string
 	endpoint string
-	model    string
-	client   *http.Client
+	model   string
+	client  *http.Client
 }
 
 func NewOpenAIProvider(apiKey string, endpoint string, model string) *OpenAIProvider {
@@ -23,13 +28,81 @@ func NewOpenAIProvider(apiKey string, endpoint string, model string) *OpenAIProv
 	return &OpenAIProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
-		model:    model,
-		client:   &http.Client{},
+		model:   model,
+		client:  &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-func (p *OpenAIProvider) Complete(ctx context.Context, prompt string) (string, error) {
-	return "", &notImplementedError{"openai provider needs implementation"}
+type openAIRequest struct {
+	Model    string    `json:"model"`
+	Messages []message `json:"messages"`
+	MaxTokens int      `json:"max_tokens,omitempty"`
+}
+
+type message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openAIResponse struct {
+	Choices []choice `json:"choices"`
+}
+
+type choice struct {
+	Message message `json:"message"`
+}
+
+func (p *OpenAIProvider) Complete(ctx context.Context, prompt string, language string) (string, error) {
+	if p.apiKey == "" {
+		return "", fmt.Errorf("API key required for OpenAI provider")
+	}
+
+	reqBody := openAIRequest{
+		Model: p.model,
+		Messages: []message{
+			{Role: "user", Content: prompt},
+		},
+		MaxTokens: 4000,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API error: %s", string(respBody))
+	}
+
+	var result openAIResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("no response from API")
+	}
+
+	return result.Choices[0].Message.Content, nil
 }
 
 func (p *OpenAIProvider) Name() string {
@@ -58,7 +131,7 @@ func NewAnthropicProvider(apiKey string, endpoint string, model string) *Anthrop
 	}
 }
 
-func (p *AnthropicProvider) Complete(ctx context.Context, prompt string) (string, error) {
+func (p *AnthropicProvider) Complete(ctx context.Context, prompt string, language string) (string, error) {
 	return "", &notImplementedError{"anthropic provider needs implementation"}
 }
 
@@ -74,14 +147,28 @@ func (e *notImplementedError) Error() string {
 	return e.msg
 }
 
-func BuildReviewPrompt(projectMap *ProjectMap) string {
+func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 	var sb strings.Builder
-	sb.WriteString("You are a senior software architect performing an architecture review.\n\n")
-	sb.WriteString("## Project Structure\n")
+
+	systemLang := "You are a senior software architect performing an architecture review."
+	responseLang := "Return your response as a structured audit report in"
+	modulesLabel := "Modules:"
+	layersLabel := "Layers:"
+
+	if language == "ru" {
+		systemLang = "Вы - опытный архитектор программного обеспечения, выполняющий обзор архитектуры."
+		responseLang = "Верните ответ в виде структурированного отчета об аудите на"
+		modulesLabel = "Модули:"
+		layersLabel = "Слои:"
+	}
+
+	sb.WriteString(systemLang)
+	sb.WriteString("\n\n## Project Structure\n")
 	sb.WriteString("Root: ")
 	sb.WriteString(projectMap.Root)
 	sb.WriteString("\n\n")
-	sb.WriteString("Modules:\n")
+	sb.WriteString(modulesLabel)
+	sb.WriteString("\n")
 	for _, m := range projectMap.Modules {
 		sb.WriteString("- ")
 		sb.WriteString(m.Name)
@@ -89,7 +176,7 @@ func BuildReviewPrompt(projectMap *ProjectMap) string {
 		sb.WriteString(m.Path)
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\nLayers:\n")
+	sb.WriteString("\n" + layersLabel + "\n")
 	for _, l := range projectMap.Layers {
 		sb.WriteString("- ")
 		sb.WriteString(l.Name)
@@ -103,14 +190,37 @@ func BuildReviewPrompt(projectMap *ProjectMap) string {
 	sb.WriteString("3. Maintainability assessment\n")
 	sb.WriteString("4. Scalability evaluation\n")
 	sb.WriteString("5. Issues and recommendations\n\n")
-	sb.WriteString("Return your response as a structured audit report.")
+	sb.WriteString(responseLang)
+	sb.WriteString(" ")
+	sb.WriteString(getLangLabel(language))
+	sb.WriteString(".")
 	return sb.String()
 }
 
-func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap) string {
+func getLangLabel(lang string) string {
+	switch lang {
+	case "ru":
+		return "Russian"
+	default:
+		return "English"
+	}
+}
+
+func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, language string) string {
 	var sb strings.Builder
-	sb.WriteString("You are performing an architecture compliance check.\n\n")
-	sb.WriteString("## Target Architecture Rules\n")
+
+	systemLang := "You are performing an architecture compliance check."
+	identifyViolations := "Identify any architecture violations."
+	returnFormat := "Return a structured report of violations with severity levels."
+
+	if language == "ru" {
+		systemLang = "Вы выполняете проверку соответствия архитектуры."
+		identifyViolations = "Выявите любые нарушения архитектуры."
+		returnFormat = "Верните структурированный отчет о нарушениях с уровнями серьезности."
+	}
+
+	sb.WriteString(systemLang)
+	sb.WriteString("\n\n## Target Architecture Rules\n")
 	for _, layer := range rules.Layers {
 		sb.WriteString("Layer: ")
 		sb.WriteString(layer.Name)
@@ -131,28 +241,39 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap) str
 		sb.WriteString(strings.Join(l.Paths, ", "))
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\nIdentify any architecture violations.")
-	sb.WriteString("\nReturn a structured report of violations with severity levels.")
+	sb.WriteString("\n" + identifyViolations)
+	sb.WriteString("\n" + returnFormat)
+	sb.WriteString(" in ")
+	sb.WriteString(getLangLabel(language))
+	sb.WriteString(".")
 	return sb.String()
 }
 
-func BuildModuleAuditPrompt(modulePath string, files []string) string {
+func BuildModuleAuditPrompt(modulePath string, files map[string]string, language string) string {
 	var sb strings.Builder
-	sb.WriteString("You are performing a module audit.\n\n")
-	sb.WriteString("## Module Path: ")
-	sb.WriteString(modulePath)
-	sb.WriteString("\n\n## Files:\n")
-	for _, f := range files {
-		sb.WriteString("- ")
-		sb.WriteString(f)
-		sb.WriteString("\n")
+
+	systemLang := "You are performing a module audit. Analyze the provided source code for correctness, design quality, coupling/cohesion, potential bugs, and complexity issues."
+	returnFormat := "Return a structured audit report."
+
+	if language == "ru" {
+		systemLang = "Вы выполняете аудит модуля. Проанализируйте предоставленный исходный код на корректность, качество дизайна, связность/зацепление, потенциальные баги и проблемы сложности."
+		returnFormat = "Верните структурированный отчет об аудите."
 	}
-	sb.WriteString("\nAnalyze for:\n")
-	sb.WriteString("1. Correctness\n")
-	sb.WriteString("2. Design quality\n")
-	sb.WriteString("3. Coupling and cohesion\n")
-	sb.WriteString("4. Potential bugs\n")
-	sb.WriteString("5. Complexity issues\n\n")
-	sb.WriteString("Return a structured audit report.")
+
+	sb.WriteString(systemLang)
+	sb.WriteString("\n\n## Module Path: ")
+	sb.WriteString(modulePath)
+	sb.WriteString("\n\n## Source Code:\n")
+	for path, content := range files {
+		sb.WriteString("### ")
+		sb.WriteString(path)
+		sb.WriteString("\n```go\n")
+		sb.WriteString(content)
+		sb.WriteString("\n```\n\n")
+	}
+	sb.WriteString(returnFormat)
+	sb.WriteString(" in ")
+	sb.WriteString(getLangLabel(language))
+	sb.WriteString(".")
 	return sb.String()
 }

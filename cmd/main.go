@@ -9,6 +9,12 @@ import (
 	"github.com/ai-mcp/code-auditor/internal/mcp"
 )
 
+var stdioMode bool
+
+func init() {
+	flag.BoolVar(&stdioMode, "stdio", false, "Run in stdio mode for MCP clients")
+}
+
 func main() {
 	provider := flag.String("provider", "", "LLM provider (overrides ENV)")
 	llm := flag.String("llm", "", "Model name (overrides ENV)")
@@ -46,20 +52,26 @@ func main() {
 	}
 
 	mcpCfg := mcp.Config{
-		Provider:   cfg.Provider,
-		LLM:        cfg.LLM,
-		APIKey:     cfg.APIKey,
-		Endpoint:   cfg.Endpoint,
+		Provider:    cfg.Provider,
+		LLM:         cfg.LLM,
+		APIKey:      cfg.APIKey,
+		Endpoint:    cfg.Endpoint,
 		ProjectPath: cfg.Project,
-		Port:       cfg.Port,
+		Port:        cfg.Port,
+		Language:    cfg.Language,
 	}
 
 	server := mcp.NewServer(mcpCfg)
 
-	fmt.Printf("AI Tech Lead MCP Server\n")
-	fmt.Printf("Project: %s\n", cfg.Project)
-	fmt.Printf("Provider: %s (%s)\n", cfg.Provider, cfg.LLM)
-	fmt.Printf("Port: %s\n\n", cfg.Port)
-
-	server.Start(cfg.Port)
+	if stdioMode {
+		fmt.Fprintf(os.Stderr, "AI Tech Lead MCP Server (stdio mode)\n")
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n\n", cfg.Provider, cfg.LLM)
+		server.StartStdio()
+	} else {
+		fmt.Printf("AI Tech Lead MCP Server\n")
+		fmt.Printf("Project: %s\n", cfg.Project)
+		fmt.Printf("Provider: %s (%s)\n", cfg.Provider, cfg.LLM)
+		fmt.Printf("Port: %s\n\n", cfg.Port)
+		server.Start(cfg.Port)
+	}
 }

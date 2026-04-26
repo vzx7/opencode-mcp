@@ -32,7 +32,7 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PROVIDER` | LLM provider (`mock`, `openai`, `anthropic`) | `mock` |
+| `PROVIDER` | LLM provider (`mock`, `openai`, `anthropic`, or OpenAI-compatible) | `mock` |
 | `LLM` | Model | `gpt-4o` |
 | `API_KEY` | API key | - |
 | `ENDPOINT` | Custom endpoint | - |
@@ -86,11 +86,12 @@ Add configuration to `~/.opencode/mcp.json` (server will load settings from `.en
 
 ```json
 {
-  "mcpServers": {
-    "code-auditor": {
-      "command": "go",
-      "args": ["/path/to/ai-mcp/cmd"],
-      "env": {}
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mcp_custom": {
+      "type": "remote",
+      "url": "localhost:8080",
+      "enabled": true
     }
   }
 }

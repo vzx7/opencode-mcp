@@ -25,14 +25,14 @@ cp .env.example .env
 
 ### .env 参数
 
-| 变量 | 描述 | 默认值 |
-|----------|-------------|---------|
-| `PROVIDER` | LLM提供商 (`mock`, `openai`, `anthropic`) | `mock` |
-| `LLM` | 模型 | `gpt-4o` |
-| `API_KEY` | API密钥 | - |
-| `ENDPOINT` | 自定义端点 | - |
-| `PROJECT` | 项目路径 | 当前目录 |
-| `PORT` | 端口 | `8080` |
+| 变量　　　 | 描述　　　　　　　　　　　　　　　　　　　　　　　　　　　　| 默认值　 |
+| ------------| -------------------------------------------------------------| ----------|
+| `PROVIDER` | LLM提供商 (`mock`, `openai`, `anthropic`, 或任何OpenAI兼容) | `mock`　 |
+| `LLM`　　　| 模型　　　　　　　　　　　　　　　　　　　　　　　　　　　　| `gpt-4o` |
+| `API_KEY`　| API密钥　　　　　　　　　　　　　　　　　　　　　　　　　　 | -　　　　|
+| `ENDPOINT` | 自定义端点　　　　　　　　　　　　　　　　　　　　　　　　　| -　　　　|
+| `PROJECT`　| 项目路径　　　　　　　　　　　　　　　　　　　　　　　　　　| 当前目录 |
+| `PORT`　　 | 端口　　　　　　　　　　　　　　　　　　　　　　　　　　　　| `8080`　 |
 
 ### .env 示例
 
@@ -81,11 +81,12 @@ go run ./cmd
 
 ```json
 {
-  "mcpServers": {
-    "code-auditor": {
-      "command": "go",
-      "args": ["/path/to/ai-mcp/cmd"],
-      "env": {}
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mcp_custom": {
+      "type": "remote",
+      "url": "localhost:8080",
+      "enabled": true
     }
   }
 }

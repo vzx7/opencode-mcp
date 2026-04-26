@@ -233,7 +233,7 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 	return report
 }
 
-func (a *Analyzer) AuditModule(modulePath string) (*domain.AuditReport, error) {
+func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditReport, error) {
 	report := &domain.AuditReport{
 		Score:          80,
 		Summary:        "Module audit complete",
@@ -241,23 +241,40 @@ func (a *Analyzer) AuditModule(modulePath string) (*domain.AuditReport, error) {
 		Recommendations: []string{},
 	}
 
-	files, err := os.ReadDir(modulePath)
+	absModulePath := modulePath
+	if !filepath.IsAbs(modulePath) {
+		absModulePath = filepath.Join(projectRoot, modulePath)
+	}
+	absModulePath, _ = filepath.Abs(absModulePath)
+
+	info, err := os.Stat(absModulePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read module path: %w", err)
 	}
 
-	goFiles := 0
-	for _, f := range files {
-		if !f.IsDir() && strings.HasSuffix(f.Name(), ".go") && !strings.HasSuffix(f.Name(), "_test.go") {
-			goFiles++
+	var goFiles []string
+
+	if info.IsDir() {
+		files, err := os.ReadDir(absModulePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read module path: %w", err)
+		}
+		for _, f := range files {
+			if !f.IsDir() && strings.HasSuffix(f.Name(), ".go") && !strings.HasSuffix(f.Name(), "_test.go") {
+				goFiles = append(goFiles, f.Name())
+			}
+		}
+	} else {
+		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+			goFiles = append(goFiles, info.Name())
 		}
 	}
 
-	if goFiles == 0 {
+	if len(goFiles) == 0 {
 		report.Issues = append(report.Issues, domain.Issue{
-			Severity:  domain.SeverityHigh,
-			Message:  "Module has no Go files",
-			Location: modulePath,
+			Severity:   domain.SeverityHigh,
+			Message:    "Module has no Go files",
+			Location:  modulePath,
 			Suggestion: "Add Go source files to the module",
 		})
 		report.Score = 0
@@ -265,15 +282,8 @@ func (a *Analyzer) AuditModule(modulePath string) (*domain.AuditReport, error) {
 		return report, nil
 	}
 
-	for _, f := range files {
-		if f.IsDir() {
-			continue
-		}
-		if strings.HasSuffix(f.Name(), ".go") {
-			relPath, _ := filepath.Rel(a.rootPath, modulePath)
-			report.Recommendations = append(report.Recommendations, fmt.Sprintf("Review: %s", relPath))
-		}
-	}
+	relPath, _ := filepath.Rel(projectRoot, absModulePath)
+	report.Recommendations = append(report.Recommendations, fmt.Sprintf("Review: %s", relPath))
 
 	data, _ := json.MarshalIndent(report, "", "  ")
 	report.Summary = string(data)

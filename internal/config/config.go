@@ -13,6 +13,7 @@ type Config struct {
 	Endpoint  string
 	Project   string
 	Port      string
+	Language  string
 }
 
 func Load() (*Config, error) {
@@ -25,6 +26,7 @@ func Load() (*Config, error) {
 		Endpoint: os.Getenv("ENDPOINT"),
 		Project:  os.Getenv("PROJECT"),
 		Port:     getEnv("PORT", "8080"),
+		Language: getEnv("LANGUAGE", "ru"),
 	}
 
 	return cfg, nil
