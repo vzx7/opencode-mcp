@@ -33,7 +33,7 @@ cp .env.example .env
 | `ENDPOINT` | 自定义端点　　　　　　　　　　　　　　　　　　 | -　　　　|
 | `PROJECT`　| 项目路径　　　　　　　　　　　　　　　　　　　 | 当前目录 |
 | `PORT`　　 | 端口　　　　　　　　　　　　　　　　　　　　　 | `8080`　 |
-| `LANGUAGE` | 响应语言 (`ru`, `en`)　　　　　　　　　　　　　| `ru`　　 |
+| `LANGUAGE` | 响应语言 (`ru`, `en`, `zh`)                                     | `ru`     |
 
 ### .env 示例
 
@@ -145,7 +145,7 @@ go run ./cmd
 - `project_path` (string, 可选) - 项目路径
 - `provider` (string, 可选) - LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容)
 - `llm` (string, 可选) - 模型 (例如 `gpt-4o`)
-- `language` (string, 可选) - 响应语言 (`ru`, `en`)
+- `language` (string, 可选) - 响应语言 (`ru`, `en`, `zh`)
 
 **调用示例：**
 ```json
@@ -204,7 +204,7 @@ go run ./cmd
 - `provider` (string, 可选) - LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容)
 - `llm` (string, 可选) - 模型
 - `target_architecture` (object, 可选) - 架构规则
-- `language` (string, 可选) - 响应语言 (`ru`, `en`)
+- `language` (string, 可选) - 响应语言 (`ru`, `en`, `zh`)
 
 **target_architecture 格式：**
 ```json
@@ -265,7 +265,7 @@ go run ./cmd
 - `project_path` (string, 可选) - 项目根路径
 - `provider` (string, 可选) - LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容)
 - `llm` (string, 可选) - 模型
-- `language` (string, 可选) - 响应语言 (`ru`, `en`)
+- `language` (string, 可选) - 响应语言 (`ru`, `en`, `zh`)
 
 **调用示例：**
 ```json

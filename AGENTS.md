@@ -14,13 +14,13 @@ go run ./cmd -stdio -provider openai -llm gpt-4o
 
 CLI flags > `.env` > hardcoded defaults.
 
-defaults: `PROVIDER=mock`, `LLM=gpt-4o`, `PORT=8080`, `LANGUAGE=ru`
+defaults: `PROVIDER=mock`, `LLM=gpt-4o`, `PORT=8080`, `LANGUAGE=ru`, HTTP timeout: 10 minutes
 
 ## Build, Test, Run
 
 ```bash
 go build ./...     # Build
-go test ./...      # Test (only internal/mcp has tests)
+go test ./...      # Test (70+ tests, 41% coverage)
 ```
 
 ## Project Structure

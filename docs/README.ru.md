@@ -33,7 +33,7 @@ cp .env.example .env
 | `ENDPOINT` | Кастомный endpoint                                                    | -                  |
 | `PROJECT`  | Путь к проекту                                                        | текущая директория |
 | `PORT`     | Порт                                                                  | `8080`             |
-| `LANGUAGE` | Язык ответов (`ru`, `en`)                                             | `ru`               |
+| `LANGUAGE` | Язык ответов (`ru`, `en`, `zh`)                                        | `ru`               |
 
 ### Примеры .env
 
@@ -145,7 +145,7 @@ go run ./cmd
 - `project_path` (string, опционально) - путь к проекту
 - `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
 - `llm` (string, опционально) - модель (например `gpt-4o`)
-- `language` (string, опционально) - язык ответа (`ru`, `en`)
+- `language` (string, опционально) - язык ответа (`ru`, `en`, `zh`)
 
 **Пример вызова:**
 ```json
@@ -204,7 +204,7 @@ go run ./cmd
 - `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
 - `llm` (string, опционально) - модель
 - `target_architecture` (object, опционально) - правила архитектуры
-- `language` (string, опционально) - язык ответа (`ru`, `en`)
+- `language` (string, опционально) - язык ответа (`ru`, `en`, `zh`)
 
 **target_architecture формат:**
 ```json
@@ -265,7 +265,7 @@ go run ./cmd
 - `project_path` (string, опционально) - путь к корню проекта
 - `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
 - `llm` (string, опционально) - модель
-- `language` (string, опционально) - язык ответа (`ru`, `en`)
+- `language` (string, опционально) - язык ответа (`ru`, `en`, `zh`)
 
 **При��ер вызова:**
 ```json

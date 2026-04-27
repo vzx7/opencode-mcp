@@ -35,10 +35,12 @@ cp .env.example .env
 | `PROVIDER` | LLM provider (`mock`, `openai`, or OpenAI-compatible) | `mock` |
 | `LLM` | Model | `gpt-4o` |
 | `API_KEY` | API key | - |
-| `ENDPOINT` | Custom endpoint | - |
+| `ENDPOINT` | Custom endpoint (for OpenAI-compatible APIs) | - |
 | `PROJECT` | Project path | current directory |
 | `PORT` | Port | `8080` |
-| `LANGUAGE` | Response language (`ru`, `en`) | `ru` |
+| `LANGUAGE` | Response language (`ru`, `en`, `zh`) | `ru` |
+
+> **Note:** HTTP timeout for LLM requests is 10 minutes (suitable for long responses).
 
 ### .env Examples
 
@@ -56,12 +58,14 @@ LLM=gpt-4o
 API_KEY=sk-...
 ```
 
-**Anthropic** *(not yet implemented — falls back to mock)*:
+**Anthropic:**
 ```env
 PROVIDER=anthropic
 LLM=claude-3-5-sonnet-20241022
 API_KEY=sk-ant-...
 ```
+
+**Note:** Anthropic provider requires API key. Without it, falls back to mock.
 
 ### CLI flags
 
@@ -71,13 +75,14 @@ All flags override the corresponding `.env` values:
 -stdio         Run in stdio mode for MCP clients (Claude Desktop, Cursor, etc.)
 -provider      LLM provider (overrides PROVIDER)
 -llm           Model name (overrides LLM)
--api-key       API key (overrides API_KEY)
 -endpoint      Custom endpoint (overrides ENDPOINT)
 -port          Port (overrides PORT)
 -project       Project path (overrides PROJECT)
 -debug-dir     Debug output directory (default: <project>/debug)
 -debug         Enable verbose logging
 ```
+
+> **Security Note:** `-api-key` flag is available for convenience, but API keys may be visible in process list. For production, use `.env` file instead (it's in `.gitignore`).
 
 **Examples:**
 ```bash
@@ -150,7 +155,7 @@ Analyzes the project as a system, identifies architectural issues.
 - `project_path` (string, optional) - path to project
 - `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
 - `llm` (string, optional) - model (e.g. `gpt-4o`)
-- `language` (string, optional) - response language (`ru`, `en`)
+- `language` (string, optional) - response language (`ru`, `en`, `zh`)
 
 **Example call:**
 ```json
@@ -209,7 +214,7 @@ Checks project compliance against target architecture.
 - `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
 - `llm` (string, optional) - model
 - `target_architecture` (object, optional) - architecture rules
-- `language` (string, optional) - response language (`ru`, `en`)
+- `language` (string, optional) - response language (`ru`, `en`, `zh`)
 
 **target_architecture format:**
 ```json
@@ -270,7 +275,7 @@ Audits an individual file or module.
 - `project_path` (string, optional) - path to project root
 - `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
 - `llm` (string, optional) - model
-- `language` (string, optional) - response language (`ru`, `en`)
+- `language` (string, optional) - response language (`ru`, `en`, `zh`)
 
 **Example call:**
 ```json

@@ -54,7 +54,7 @@ debug/ directory             — .md + .json report pairs per invocation
 
 Priority (highest → lowest): CLI flags → `.env` file → hardcoded defaults.
 
-Defaults: `PROVIDER=mock`, `LLM=gpt-4o`, `PORT=8080`, `LANGUAGE=ru`.
+Defaults: `PROVIDER=mock`, `LLM=gpt-4o`, `PORT=8080`, `LANGUAGE=ru`, HTTP timeout: 10 minutes.
 
 Copy `.env.example` to `.env` and set `API_KEY` for non-mock providers. Each tool call can also override provider/model via its own arguments.
 
