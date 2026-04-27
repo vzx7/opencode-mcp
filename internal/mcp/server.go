@@ -20,6 +20,13 @@ import (
 	"github.com/vzx7/opencode-mcp/internal/tools"
 )
 
+func getProviderAPIKey(provider string, openAIKey, anthropicKey string) string {
+	if provider == "anthropic" && anthropicKey != "" {
+		return anthropicKey
+	}
+	return openAIKey
+}
+
 type Server struct {
 	executor    *tools.ToolExecutor
 	defaultPath string
@@ -46,10 +53,12 @@ type Config struct {
 func NewServer(cfg Config) *Server {
 	logger := log.New(os.Stdout, "[MCP] ", log.LstdFlags)
 
+	apiKey := getProviderAPIKey(cfg.Provider, cfg.OpenAIKey, cfg.AnthropicKey)
+
 	var llmProvider llm.LLMProvider
 	var err error
 	if cfg.Provider != "" {
-		llmProvider, err = llm.NewProvider(cfg.Provider, "", cfg.Endpoint, cfg.LLM)
+		llmProvider, err = llm.NewProvider(cfg.Provider, apiKey, cfg.Endpoint, cfg.LLM)
 		if err != nil {
 			logger.Printf("Warning: failed to create LLM provider: %v, continuing without LLM", err)
 			llmProvider = llm.NewMockProvider()
@@ -269,8 +278,6 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 	}
 }
 
-// FIXED VERSION (key fixes: correct content saving, better logging, safer debug handling)
-
 func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interface{} {
 	toolName, ok := req.Params["name"].(string)
 	if !ok {
@@ -425,7 +432,7 @@ func (s *Server) persistReport(toolName string, report *domain.AuditReport, proj
 	}
 
 	now := time.Now()
-	base := fmt.Sprintf("%s_%s_%d", toolName, now.Format("20060102_150405"), now.UnixNano()%10000)
+	base := fmt.Sprintf("%s_%s_%d", toolName, now.Format("20060102_150405"), now.UnixNano())
 
 	mdHeader := fmt.Sprintf("# %s\n\n**Time:** %s\n\n**Project:** %s\n\n",
 		strings.ToUpper(toolName),
