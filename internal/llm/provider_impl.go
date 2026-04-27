@@ -13,6 +13,8 @@ import (
 
 const (
 	DefaultTimeout = 10 * time.Minute
+	MaxRetries   = 3
+	InitialDelay = 1 * time.Second
 )
 
 type OpenAIProvider struct {
@@ -74,6 +76,35 @@ func (p *OpenAIProvider) Complete(ctx context.Context, prompt string, language s
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	var lastErr error
+	delay := InitialDelay
+
+	for attempt := 0; attempt < MaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(delay):
+			}
+			delay *= 2
+		}
+
+		lastErr = nil
+		var result string
+		result, lastErr = p.doRequest(ctx, body)
+		if lastErr == nil {
+			return result, nil
+		}
+
+		if !isRetryableError(lastErr) {
+			return "", lastErr
+		}
+	}
+
+	return "", fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+func (p *OpenAIProvider) doRequest(ctx context.Context, body []byte) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
@@ -107,6 +138,17 @@ func (p *OpenAIProvider) Complete(ctx context.Context, prompt string, language s
 	}
 
 	return result.Choices[0].Message.Content, nil
+}
+
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "request failed") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "i/o timeout")
 }
 
 func (p *OpenAIProvider) Name() string {

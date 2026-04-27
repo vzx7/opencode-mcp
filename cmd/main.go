@@ -20,7 +20,6 @@ func init() {
 func main() {
 	provider := flag.String("provider", "", "LLM provider (overrides ENV)")
 	llm := flag.String("llm", "", "Model name (overrides ENV)")
-	apiKey := flag.String("api-key", "", "API key (overrides ENV)")
 	endpoint := flag.String("endpoint", "", "Endpoint (overrides ENV)")
 	port := flag.String("port", "", "Port (overrides ENV)")
 	project := flag.String("project", "", "Project path (overrides ENV)")
@@ -41,9 +40,6 @@ func main() {
 	if flag.Lookup("llm").Value.String() != "" {
 		cfg.LLM = *llm
 	}
-	if flag.Lookup("api-key").Value.String() != "" {
-		cfg.APIKey = *apiKey
-	}
 	if flag.Lookup("endpoint").Value.String() != "" {
 		cfg.Endpoint = *endpoint
 	}
@@ -53,6 +49,13 @@ func main() {
 	if flag.Lookup("project").Value.String() != "" {
 		cfg.Project = *project
 	}
+
+	// Validate after CLI overrides
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
+		os.Exit(1)
+	}
+
 	dbgDir := *debugDir
 
 	mcpCfg := mcp.Config{
