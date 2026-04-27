@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ai-mcp/code-auditor/internal/analyzer"
-	"github.com/ai-mcp/code-auditor/internal/domain"
-	"github.com/ai-mcp/code-auditor/internal/llm"
+	"github.com/vzx7/opencode-mcp/internal/analyzer"
+	"github.com/vzx7/opencode-mcp/internal/domain"
+	"github.com/vzx7/opencode-mcp/internal/llm"
 )
 
 const (

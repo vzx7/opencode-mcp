@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-mcp/code-auditor/internal/domain"
+	"github.com/vzx7/opencode-mcp/internal/domain"
 )
 
 func TestGetDefaultEndpoint(t *testing.T) {

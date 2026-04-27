@@ -1,4 +1,4 @@
-module github.com/ai-mcp/code-auditor
+module github.com/vzx7/opencode-mcp
 
 go 1.21
 

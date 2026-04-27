@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ai-mcp/code-auditor/internal/config"
-	"github.com/ai-mcp/code-auditor/internal/mcp"
+	"github.com/vzx7/opencode-mcp/internal/config"
+	"github.com/vzx7/opencode-mcp/internal/mcp"
 )
 
 var stdioMode bool

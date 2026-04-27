@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ai-mcp/code-auditor/internal/domain"
+	"github.com/vzx7/opencode-mcp/internal/domain"
 )
 
 const (
@@ -224,7 +224,7 @@ func (a *Analyzer) analyzeGoMod(pm *domain.ProjectMap) {
 				dep = parts[1]
 			}
 		}
-		if dep != "" && !strings.HasPrefix(dep, "github.com/ai-mcp/") {
+		if dep != "" && !strings.HasPrefix(dep, "github.com/vzx7/") {
 			pm.Dependencies["github.com"] = append(pm.Dependencies["github.com"], dep)
 		}
 	}
