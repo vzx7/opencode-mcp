@@ -11,8 +11,9 @@ func TestConfigValidate(t *testing.T) {
 		cfg     *Config
 		wantErr bool
 	}{
-		{"mock provider no key", &Config{Provider: "mock", APIKey: ""}, false},
-		{"openai no key fails", &Config{Provider: "openai", APIKey: ""}, true},
+		{"mock provider no key", &Config{Provider: "mock", OpenAIKey: ""}, false},
+		{"openai no key fails", &Config{Provider: "openai", OpenAIKey: ""}, true},
+		{"anthropic no key fails", &Config{Provider: "anthropic", AnthropicKey: ""}, true},
 		{"valid port", &Config{Provider: "mock", Port: "8080"}, false},
 		{"invalid port", &Config{Provider: "mock", Port: "abc"}, true},
 		{"valid language ru", &Config{Provider: "mock", Language: "ru"}, false},
@@ -87,13 +88,14 @@ func TestLoad(t *testing.T) {
 	t.Run("loads from env", func(t *testing.T) {
 		os.Setenv("PROVIDER", "openai")
 		os.Setenv("LLM", "gpt-4o-mini")
-		os.Setenv("API_KEY", "sk-test123")
+		os.Setenv("OPENAI_API_KEY", "sk-test123")
 		os.Setenv("PORT", "3000")
 		os.Setenv("LANGUAGE", "en")
 		defer func() {
 			os.Unsetenv("PROVIDER")
 			os.Unsetenv("LLM")
-			os.Unsetenv("API_KEY")
+			os.Unsetenv("OPENAI_API_KEY")
+			os.Unsetenv("ANTHROPIC_API_KEY")
 			os.Unsetenv("PORT")
 			os.Unsetenv("LANGUAGE")
 		}()
@@ -109,8 +111,8 @@ func TestLoad(t *testing.T) {
 		if cfg.LLM != "gpt-4o-mini" {
 			t.Errorf("LLM = %q, want %q", cfg.LLM, "gpt-4o-mini")
 		}
-		if cfg.APIKey != "sk-test123" {
-			t.Errorf("APIKey = %q, want %q", cfg.APIKey, "sk-test123")
+		if cfg.OpenAIKey != "sk-test123" {
+			t.Errorf("OpenAIKey = %q, want %q", cfg.OpenAIKey, "sk-test123")
 		}
 		if cfg.Port != "3000" {
 			t.Errorf("Port = %q, want %q", cfg.Port, "3000")

@@ -25,7 +25,6 @@ type ToolExecutor struct {
 	defaultPath string
 	defaultLLM llm.LLMProvider
 	defaultLang string
-	apiKey    string
 	endpoint  string
 	mu        sync.RWMutex
 	debug     bool
@@ -35,7 +34,6 @@ type ToolExecutor struct {
 type ToolExecutorConfig struct {
 	DefaultPath string
 	LLM       llm.LLMProvider
-	APIKey    string
 	Endpoint  string
 	Language  string
 	Debug    bool
@@ -53,7 +51,6 @@ func NewToolExecutor(cfg ToolExecutorConfig) *ToolExecutor {
 		defaultPath: cfg.DefaultPath,
 		defaultLLM: cfg.LLM,
 		defaultLang: cfg.Language,
-		apiKey:     cfg.APIKey,
 		endpoint:   cfg.Endpoint,
 		debug:     cfg.Debug,
 		logger:    cfg.Logger,
@@ -97,7 +94,7 @@ func (te *ToolExecutor) getLLM(provider, model string) (llm.LLMProvider, error) 
 		}
 	}
 
-	newLLM, err := llm.NewProvider(p, te.apiKey, te.endpoint, m)
+	newLLM, err := llm.NewProvider(p, "", te.endpoint, m)
 	if err != nil {
 		return te.defaultLLM, fmt.Errorf("failed to create LLM provider: %w", err)
 	}

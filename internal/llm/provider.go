@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -21,30 +22,26 @@ func getDefaultEndpoint(providerType string) string {
 	switch providerType {
 	case "anthropic":
 		return "https://api.anthropic.com/v1/messages"
-	case "openai", "":
+	case "openai", "vsellm":
 		fallthrough
 	default:
 		return "https://api.openai.com/v1/chat/completions"
 	}
 }
 
-var validProviders = map[string]bool{
-	"mock":     true,
-	"openai":   true,
-	"anthropic": true,
-}
-
 func NewProvider(providerType string, apiKey string, endpoint string, model string) (LLMProvider, error) {
-	if providerType != "mock" && providerType != "" && apiKey == "" {
+	apiKey = resolveAPIKey(providerType, apiKey)
+
+	if providerType == "mock" || providerType == "" {
+		return NewMockProvider(), nil
+	}
+
+	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required for provider %q", providerType)
 	}
 
-	if providerType != "" && !validProviders[providerType] {
-		return nil, fmt.Errorf("unknown provider %q", providerType)
-	}
-
 	if endpoint == "" {
-		endpoint = getDefaultEndpoint(providerType)
+		endpoint = getOpenAICompatibleEndpoint(providerType)
 	}
 
 	switch providerType {
@@ -52,11 +49,28 @@ func NewProvider(providerType string, apiKey string, endpoint string, model stri
 		return NewOpenAIProvider(apiKey, endpoint, model), nil
 	case "anthropic":
 		return NewAnthropicProvider(apiKey, endpoint, model), nil
-	case "mock", "":
-		fallthrough
 	default:
-		return NewMockProvider(), nil
+		return NewOpenAIProvider(apiKey, endpoint, model), nil
 	}
+}
+
+func getOpenAICompatibleEndpoint(providerType string) string {
+	switch providerType {
+	case "anthropic":
+		return "https://api.anthropic.com/v1/messages"
+	default:
+		return "https://api.openai.com/v1/chat/completions"
+	}
+}
+
+func resolveAPIKey(providerType string, apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	if providerType == "anthropic" {
+		return os.Getenv("ANTHROPIC_API_KEY")
+	}
+	return os.Getenv("OPENAI_API_KEY")
 }
 
 type MockProvider struct {

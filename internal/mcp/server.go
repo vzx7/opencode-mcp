@@ -35,7 +35,8 @@ type Config struct {
 	DebugDir    string
 	Provider   string
 	LLM        string
-	APIKey     string
+	OpenAIKey     string
+	AnthropicKey  string
 	Endpoint  string
 	Port       string
 	Language  string
@@ -48,7 +49,7 @@ func NewServer(cfg Config) *Server {
 	var llmProvider llm.LLMProvider
 	var err error
 	if cfg.Provider != "" {
-		llmProvider, err = llm.NewProvider(cfg.Provider, cfg.APIKey, cfg.Endpoint, cfg.LLM)
+		llmProvider, err = llm.NewProvider(cfg.Provider, "", cfg.Endpoint, cfg.LLM)
 		if err != nil {
 			logger.Printf("Warning: failed to create LLM provider: %v, continuing without LLM", err)
 			llmProvider = llm.NewMockProvider()
@@ -60,7 +61,6 @@ func NewServer(cfg Config) *Server {
 	executor := tools.NewToolExecutor(tools.ToolExecutorConfig{
 		DefaultPath: cfg.ProjectPath,
 		LLM:        llmProvider,
-		APIKey:     cfg.APIKey,
 		Endpoint:   cfg.Endpoint,
 		Language:   cfg.Language,
 		Debug:     cfg.Debug,
@@ -606,7 +606,7 @@ func (s *Server) Start(port string) {
 
 	s.logger.Println("Shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), llm.DefaultTimeout)
 	defer cancel()
 
 	if err := httpServer.Shutdown(ctx); err != nil {

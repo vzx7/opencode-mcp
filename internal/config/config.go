@@ -12,7 +12,8 @@ import (
 type Config struct {
 	Provider  string
 	LLM       string
-	APIKey    string
+	OpenAIKey string
+	AnthropicKey string
 	Endpoint  string
 	Project   string
 	Port      string
@@ -20,8 +21,11 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
-	if c.Provider != "mock" && c.APIKey == "" {
-		return errors.New("API_KEY required for non-mock provider")
+	if c.Provider == "openai" && c.OpenAIKey == "" {
+		return errors.New("OPENAI_API_KEY required for openai provider")
+	}
+	if c.Provider == "anthropic" && c.AnthropicKey == "" {
+		return errors.New("ANTHROPIC_API_KEY required for anthropic provider")
 	}
 	if c.Port != "" {
 		if _, err := strconv.Atoi(c.Port); err != nil {
@@ -40,9 +44,10 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Provider: getEnv("PROVIDER", "mock"),
+		Provider:  getEnv("PROVIDER", "mock"),
 		LLM:      getEnv("LLM", "gpt-4o"),
-		APIKey:   os.Getenv("API_KEY"),
+		OpenAIKey:   os.Getenv("OPENAI_API_KEY"),
+		AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"),
 		Endpoint: os.Getenv("ENDPOINT"),
 		Project:  os.Getenv("PROJECT"),
 		Port:     getEnv("PORT", "8080"),

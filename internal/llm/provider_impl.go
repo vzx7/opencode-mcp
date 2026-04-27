@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -86,7 +87,6 @@ func (p *OpenAIProvider) Complete(ctx context.Context, prompt string, language s
 				return "", ctx.Err()
 			case <-time.After(delay):
 			}
-			delay *= 2
 		}
 
 		lastErr = nil
@@ -96,8 +96,12 @@ func (p *OpenAIProvider) Complete(ctx context.Context, prompt string, language s
 			return result, nil
 		}
 
-		if !isRetryableError(lastErr) {
+		if rErr, ok := lastErr.(*retryableError); ok && rErr.retryAfter > 0 {
+			delay = rErr.retryAfter
+		} else if !isRetryableError(lastErr) {
 			return "", lastErr
+		} else if delay < InitialDelay*4 {
+			delay *= 2
 		}
 	}
 
@@ -124,6 +128,9 @@ func (p *OpenAIProvider) doRequest(ctx context.Context, body []byte) (string, er
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode >= 500 {
+		return "", &retryableError{statusCode: resp.StatusCode, retryAfter: parseRetryAfter(resp.Header)}
+	}
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("API error: %s", string(respBody))
 	}
@@ -144,11 +151,35 @@ func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if _, ok := err.(*retryableError); ok {
+		return true
+	}
 	errStr := err.Error()
 	return strings.Contains(errStr, "request failed") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "i/o timeout")
+}
+
+type retryableError struct {
+	statusCode int
+	retryAfter time.Duration
+}
+
+func (e *retryableError) Error() string {
+	if e.retryAfter > 0 {
+		return fmt.Sprintf("retryable error: status %d, retry after %v", e.statusCode, e.retryAfter)
+	}
+	return fmt.Sprintf("retryable error: status %d", e.statusCode)
+}
+
+func parseRetryAfter(h http.Header) time.Duration {
+	if v := h.Get("Retry-After"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil {
+			return time.Duration(d) * time.Second
+		}
+	}
+	return 0
 }
 
 func (p *OpenAIProvider) Name() string {
@@ -173,12 +204,118 @@ func NewAnthropicProvider(apiKey string, endpoint string, model string) *Anthrop
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: DefaultTimeout},
 	}
 }
 
+type anthropicRequest struct {
+	Model    string    `json:"model"`
+	Messages []message `json:"messages"`
+	MaxTokens int     `json:"max_tokens,omitempty"`
+}
+
+type anthropicResponse struct {
+	Content []contentBlock `json:"content"`
+}
+
+type contentBlock struct {
+	Type  string `json:"type"`
+	Text  string `json:"text"`
+}
+
 func (p *AnthropicProvider) Complete(ctx context.Context, prompt string, language string) (string, error) {
-	return "", &notImplementedError{"anthropic provider needs implementation"}
+	if p.apiKey == "" {
+		return "", fmt.Errorf("API key required for Anthropic provider")
+	}
+
+	reqBody := anthropicRequest{
+		Model: p.model,
+		Messages: []message{
+			{Role: "user", Content: prompt},
+		},
+		MaxTokens: 4096,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	var lastErr error
+	delay := InitialDelay
+
+	for attempt := 0; attempt < MaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+
+		lastErr = nil
+		var result string
+		result, lastErr = p.doRequest(ctx, body)
+		if lastErr == nil {
+			return result, nil
+		}
+
+		if rErr, ok := lastErr.(*retryableError); ok && rErr.retryAfter > 0 {
+			delay = rErr.retryAfter
+		} else if !isRetryableError(lastErr) {
+			return "", lastErr
+		} else if delay < InitialDelay*4 {
+			delay *= 2
+		}
+	}
+
+	return "", fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+func (p *AnthropicProvider) doRequest(ctx context.Context, body []byte) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode >= 500 {
+		return "", &retryableError{statusCode: resp.StatusCode, retryAfter: parseRetryAfter(resp.Header)}
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API error: %s", string(respBody))
+	}
+
+	var result anthropicResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(result.Content) == 0 {
+		return "", fmt.Errorf("no response from API")
+	}
+
+	for _, block := range result.Content {
+		if block.Type == "text" {
+			return block.Text, nil
+		}
+	}
+
+	return "", fmt.Errorf("no text content in response")
 }
 
 func (p *AnthropicProvider) Name() string {

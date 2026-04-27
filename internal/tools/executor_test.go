@@ -135,7 +135,13 @@ func TestGetLLM(t *testing.T) {
 	})
 
 	t.Run("returns error for invalid provider without api key", func(t *testing.T) {
-		te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM, APIKey: ""})
+		os.Setenv("OPENAI_API_KEY", "")
+		os.Setenv("ANTHROPIC_API_KEY", "")
+		defer func() {
+			os.Setenv("OPENAI_API_KEY", "")
+			os.Setenv("ANTHROPIC_API_KEY", "")
+		}()
+		te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
 		_, err := te.getLLM("openai", "gpt-4o")
 		if err == nil {
 			t.Error("expected error for openai without api key")

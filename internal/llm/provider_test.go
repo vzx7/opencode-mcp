@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -49,6 +50,12 @@ func TestNewProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("OPENAI_API_KEY", "")
+			os.Setenv("ANTHROPIC_API_KEY", "")
+			defer func() {
+				os.Setenv("OPENAI_API_KEY", "")
+				os.Setenv("ANTHROPIC_API_KEY", "")
+			}()
 			got, err := NewProvider(tt.provider, tt.apiKey, "", "")
 			if tt.wantError {
 				if err == nil {
