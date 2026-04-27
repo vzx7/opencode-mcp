@@ -99,7 +99,13 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	contentType := r.Header.Get("Content-Type")
+	if contentType != "application/json" && !strings.HasPrefix(contentType, "application/json") {
+		s.sendError(w, nil, "Content-Type must be application/json")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
 	if err != nil {
 		s.sendError(w, nil, fmt.Sprintf("invalid request: %v", err))
 		return
@@ -109,6 +115,16 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	var req JSONRPCRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		s.sendError(w, nil, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+
+	if req.JSONRPC != "2.0" {
+		s.sendError(w, &req, "JSONRPC version must be 2.0")
+		return
+	}
+
+	if req.Method == "" {
+		s.sendError(w, &req, "method is required")
 		return
 	}
 
@@ -571,10 +587,13 @@ func (s *Server) Start(port string) {
 	s.logger.Printf("Starting MCP server on port %s", port)
 	s.logger.Printf("LLM Provider: %s", s.llm.Name())
 
-	http.HandleFunc("/", s.HandleJSONRPC)
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: http.HandlerFunc(s.HandleJSONRPC),
+	}
 
 	go func() {
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			s.logger.Fatalf("Server error: %v", err)
 		}
 	}()
@@ -584,25 +603,57 @@ func (s *Server) Start(port string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
+
 	s.logger.Println("Shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(ctx); err != nil {
+		s.logger.Printf("Server shutdown error: %v", err)
+	}
+
+	s.logger.Println("Server stopped")
 }
 
 func (s *Server) StartStdio() {
-	decoder := json.NewDecoder(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 
 	if s.debug {
 		s.logger.Println("Stdio mode started")
 	}
 
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	shutdownCh := make(chan struct{})
+	go func() {
+		<-sigCh
+		close(shutdownCh)
+	}()
+
+	decoder := json.NewDecoder(os.Stdin)
+
 	for {
 		var req JSONRPCRequest
-		if err := decoder.Decode(&req); err != nil {
-			if err == io.EOF {
+		reqCh := make(chan error, 1)
+
+		go func() {
+			reqCh <- decoder.Decode(&req)
+		}()
+
+		select {
+		case <-shutdownCh:
+			s.logger.Println("Shutting down...")
+			return
+		case err := <-reqCh:
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+				s.logger.Printf("Read error: %v", err)
 				return
 			}
-			s.logger.Printf("Read error: %v", err)
-			return
 		}
 
 		if s.debug {

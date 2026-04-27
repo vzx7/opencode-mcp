@@ -8,6 +8,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+)
+
+const (
+	DefaultTimeout = 10 * time.Minute
 )
 
 type OpenAIProvider struct {
@@ -28,7 +33,7 @@ func NewOpenAIProvider(apiKey string, endpoint string, model string) *OpenAIProv
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:   model,
-		client:  &http.Client{Timeout: 0},
+		client:  &http.Client{Timeout: DefaultTimeout},
 	}
 }
 

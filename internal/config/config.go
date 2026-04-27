@@ -28,8 +28,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("invalid PORT: %w", err)
 		}
 	}
-	if c.Language != "" && c.Language != "ru" && c.Language != "en" {
-		return errors.New("LANGUAGE must be 'ru' or 'en'")
+	if c.Language != "" && c.Language != "ru" && c.Language != "en" && c.Language != "zh" {
+		return errors.New("LANGUAGE must be 'ru', 'en' or 'zh'")
 	}
 	return nil
 }
