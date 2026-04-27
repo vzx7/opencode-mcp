@@ -1,0 +1,40 @@
+{
+  "system_role": "您是一位资深软件架构师，执行架构审查。",
+  "labels": {
+    "modules": "模块:",
+    "layers": "层级:",
+    "root": "根目录:",
+    "paths": "路径:",
+    "allowed": "允许:"
+  },
+  "review_focus": [
+    "架构风格识别",
+    "耦合性和内聚性分析",
+    "可维护性评估",
+    "可扩展性评估",
+    "问题与建议"
+  ],
+  "json_schema_instruction": "仅返回有效的JSON对象 - 无markdown代码块，无解释文本。Schema:",
+  "json_schema": {
+    "score": "<整数 0-100>",
+    "summary": "<中文总体评估>",
+    "issues": [
+      {
+        "severity": "<critical|high|medium|low>",
+        "message": "<问题描述>",
+        "location": "<文件或组件>",
+        "suggestion": "<修复方法>"
+      }
+    ],
+    "recommendations": ["<可操作的建议>"]
+  },
+  "compliance": {
+    "system_role": "您正在执行架构合规性检查。",
+    "identify_violations": "识别任何架构违规。",
+    "return_format": "返回结构化的违规报告，包含严重级别。"
+  },
+  "module_audit": {
+    "system_role": "您正在执行模块审计。分析提供的源代码的正确性、设计质量、耦合性/内聚性、潜在bug和复杂度问题。",
+    "return_format": "返回结构化的审计报告。"
+  }
+}

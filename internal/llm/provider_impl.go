@@ -149,22 +149,13 @@ func (e *notImplementedError) Error() string {
 func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 	var sb strings.Builder
 
-	systemLang := "You are a senior software architect performing an architecture review."
-	modulesLabel := "Modules:"
-	layersLabel := "Layers:"
+	p := GetPrompts(language)
 
-	if language == "ru" {
-		systemLang = "Вы - опытный архитектор программного обеспечения, выполняющий обзор архитектуры."
-		modulesLabel = "Модули:"
-		layersLabel = "Слои:"
-	}
-
-	sb.WriteString(systemLang)
-	sb.WriteString("\n\n## Project Structure\n")
-	sb.WriteString("Root: ")
+	sb.WriteString(p.SystemRole)
+	sb.WriteString("\n\n## " + p.Labels["root"] + " ")
 	sb.WriteString(projectMap.Root)
 	sb.WriteString("\n\n")
-	sb.WriteString(modulesLabel)
+	sb.WriteString(p.Labels["modules"])
 	sb.WriteString("\n")
 	for _, m := range projectMap.Modules {
 		sb.WriteString("- ")
@@ -173,7 +164,7 @@ func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 		sb.WriteString(m.Path)
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\n" + layersLabel + "\n")
+	sb.WriteString("\n" + p.Labels["layers"] + "\n")
 	for _, l := range projectMap.Layers {
 		sb.WriteString("- ")
 		sb.WriteString(l.Name)
@@ -182,73 +173,44 @@ func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\nProvide a structured architecture review focusing on:\n")
-	sb.WriteString("1. Architecture style identification\n")
-	sb.WriteString("2. Coupling and cohesion analysis\n")
-	sb.WriteString("3. Maintainability assessment\n")
-	sb.WriteString("4. Scalability evaluation\n")
-	sb.WriteString("5. Issues and recommendations\n")
-	appendJSONSchema(&sb, language)
+	for i, focus := range p.ReviewFocus {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, focus))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(p.JSONSchemaInstruction)
+	sb.WriteString("\n")
+	sb.WriteString(GetJSONSchema(language))
 	return sb.String()
 }
 
-func getLangLabel(lang string) string {
-	switch lang {
-	case "ru":
-		return "Russian"
-	default:
-		return "English"
-	}
-}
-
 func appendJSONSchema(sb *strings.Builder, language string) {
-	instruction := "\n\nReturn ONLY a valid JSON object — no markdown fences, no explanation text. Schema:\n"
-	if language == "ru" {
-		instruction = "\n\nВерните ТОЛЬКО валидный JSON объект — без markdown-блоков, без пояснений. Схема:\n"
-	}
-	sb.WriteString(instruction)
-	sb.WriteString(`{
-  "score": <integer 0-100>,
-  "summary": "<overall assessment in ` + getLangLabel(language) + `>",
-  "issues": [
-    {
-      "severity": "<critical|high|medium|low>",
-      "message": "<issue description>",
-      "location": "<file or component>",
-      "suggestion": "<how to fix>"
-    }
-  ],
-  "recommendations": ["<actionable recommendation>"]
-}`)
+	p := GetPrompts(language)
+	sb.WriteString("\n\n" + p.JSONSchemaInstruction)
+	sb.WriteString("\n")
+	sb.WriteString(GetJSONSchema(language))
 }
 
 func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, language string) string {
 	var sb strings.Builder
 
-	systemLang := "You are performing an architecture compliance check."
-	identifyViolations := "Identify any architecture violations."
-	returnFormat := "Return a structured report of violations with severity levels."
+	p := GetPrompts(language)
+	c := p.Compliance
 
-	if language == "ru" {
-		systemLang = "Вы выполняете проверку соответствия архитектуры."
-		identifyViolations = "Выявите любые нарушения архитектуры."
-		returnFormat = "Верните структурированный отчет о нарушениях с уровнями серьезности."
-	}
-
-	sb.WriteString(systemLang)
+	sb.WriteString(c.SystemRole)
 	sb.WriteString("\n\n## Target Architecture Rules\n")
 	for _, layer := range rules.Layers {
 		sb.WriteString("Layer: ")
 		sb.WriteString(layer.Name)
-		sb.WriteString("\n  Paths: ")
+		sb.WriteString("\n  " + p.Labels["paths"] + " ")
 		sb.WriteString(strings.Join(layer.Paths, ", "))
-		sb.WriteString("\n  Allowed: ")
+		sb.WriteString("\n  " + p.Labels["allowed"] + " ")
 		sb.WriteString(strings.Join(layer.Allow, ", "))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n## Current Project Structure\n")
-	sb.WriteString("Root: ")
+	sb.WriteString(p.Labels["root"] + " ")
 	sb.WriteString(projectMap.Root)
-	sb.WriteString("\n\nLayers:\n")
+	sb.WriteString("\n\n" + p.Labels["layers"] + "\n")
 	for _, l := range projectMap.Layers {
 		sb.WriteString("- ")
 		sb.WriteString(l.Name)
@@ -256,24 +218,22 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, lan
 		sb.WriteString(strings.Join(l.Paths, ", "))
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\n" + identifyViolations)
-	sb.WriteString("\n" + returnFormat)
-	appendJSONSchema(&sb, language)
+	sb.WriteString("\n" + c.IdentifyViolations)
+	sb.WriteString("\n" + c.ReturnFormat)
+	sb.WriteString("\n")
+	sb.WriteString(p.JSONSchemaInstruction)
+	sb.WriteString("\n")
+	sb.WriteString(GetJSONSchema(language))
 	return sb.String()
 }
 
 func BuildModuleAuditPrompt(modulePath string, files map[string]string, language string) string {
 	var sb strings.Builder
 
-	systemLang := "You are performing a module audit. Analyze the provided source code for correctness, design quality, coupling/cohesion, potential bugs, and complexity issues."
-	returnFormat := "Return a structured audit report."
+	p := GetPrompts(language)
+	m := p.ModuleAudit
 
-	if language == "ru" {
-		systemLang = "Вы выполняете аудит модуля. Проанализируйте предоставленный исходный код на корректность, качество дизайна, связность/зацепление, потенциальные баги и проблемы сложности."
-		returnFormat = "Верните структурированный отчет об аудите."
-	}
-
-	sb.WriteString(systemLang)
+	sb.WriteString(m.SystemRole)
 	sb.WriteString("\n\n## Module Path: ")
 	sb.WriteString(modulePath)
 	sb.WriteString("\n\n## Source Code:\n")
@@ -284,7 +244,10 @@ func BuildModuleAuditPrompt(modulePath string, files map[string]string, language
 		sb.WriteString(content)
 		sb.WriteString("\n```\n\n")
 	}
-	sb.WriteString(returnFormat)
-	appendJSONSchema(&sb, language)
+	sb.WriteString(m.ReturnFormat)
+	sb.WriteString("\n")
+	sb.WriteString(p.JSONSchemaInstruction)
+	sb.WriteString("\n")
+	sb.WriteString(GetJSONSchema(language))
 	return sb.String()
 }

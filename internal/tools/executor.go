@@ -134,6 +134,9 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM: %w", err)
 	}
+	if llmProvider == nil {
+		return nil, fmt.Errorf("LLM provider is nil")
+	}
 	language := te.getLanguage(input.Language)
 	prompt := llm.BuildReviewPrompt(pm, language)
 
@@ -142,20 +145,20 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 	logger := te.logger
 	te.mu.RUnlock()
 
-	if debug {
+	if debug && logger != nil {
 		logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 	}
 
 	llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 	if err != nil {
-		if debug {
+		if debug && logger != nil {
 			logger.Printf("<<< LLM Error: %v", err)
 		}
 		return nil, fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	if debug {
-		te.logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+	if debug && logger != nil {
+		logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 	}
 
 	report := te.buildReportFromLLM(llmResponse)
@@ -298,13 +301,13 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 		logger := te.logger
 		te.mu.RUnlock()
 
-		if debug {
+		if debug && logger != nil {
 			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
-			if debug {
+			if debug && logger != nil {
 				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 			}
 			llmReport := parseLLMResponse(llmResponse)
@@ -371,13 +374,13 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 		logger := te.logger
 		te.mu.RUnlock()
 
-		if debug {
+		if debug && logger != nil {
 			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
-			if debug {
+			if debug && logger != nil {
 				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 			}
 			llmReport := parseLLMResponse(llmResponse)

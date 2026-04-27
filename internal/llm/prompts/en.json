@@ -1,0 +1,40 @@
+{
+  "system_role": "You are a senior software architect performing an architecture review.",
+  "labels": {
+    "modules": "Modules:",
+    "layers": "Layers:",
+    "root": "Root:",
+    "paths": "Paths:",
+    "allowed": "Allowed:"
+  },
+  "review_focus": [
+    "Architecture style identification",
+    "Coupling and cohesion analysis",
+    "Maintainability assessment",
+    "Scalability evaluation",
+    "Issues and recommendations"
+  ],
+  "json_schema_instruction": "Return ONLY a valid JSON object — no markdown fences, no explanation text. Schema:",
+  "json_schema": {
+    "score": "<integer 0-100>",
+    "summary": "<overall assessment in English>",
+    "issues": [
+      {
+        "severity": "<critical|high|medium|low>",
+        "message": "<issue description>",
+        "location": "<file or component>",
+        "suggestion": "<how to fix>"
+      }
+    ],
+    "recommendations": ["<actionable recommendation>"]
+  },
+  "compliance": {
+    "system_role": "You are performing an architecture compliance check.",
+    "identify_violations": "Identify any architecture violations.",
+    "return_format": "Return a structured report of violations with severity levels."
+  },
+  "module_audit": {
+    "system_role": "You are performing a module audit. Analyze the provided source code for correctness, design quality, coupling/cohesion, potential bugs, and complexity issues.",
+    "return_format": "Return a structured audit report."
+  }
+}
