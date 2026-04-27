@@ -4,8 +4,43 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
+
+func findPromptsPath() string {
+	paths := []string{
+		"internal/llm/prompts",
+		"prompts",
+	}
+
+	for _, p := range paths {
+		if _, err := os.Stat(filepath.Join(p, "en.json")); err == nil {
+			return p
+		}
+	}
+
+	cwd, _ := os.Getwd()
+	for _, p := range paths {
+		fullPath := filepath.Join(cwd, p)
+		if _, err := os.Stat(fullPath); err == nil {
+			return fullPath
+		}
+	}
+
+	execPath, _ := os.Executable()
+	execDir := filepath.Dir(execPath)
+	for _, p := range paths {
+		fullPath := filepath.Join(execDir, p)
+		if _, err := os.Stat(fullPath); err == nil {
+			return fullPath
+		}
+	}
+
+	return "internal/llm/prompts"
+}
+
+var promptsBasePath = findPromptsPath()
 
 type Prompts struct {
 	SystemRole             string            `json:"system_role"`
@@ -45,9 +80,9 @@ type IssueSchema struct {
 var promptsByLang = map[string]*Prompts{}
 
 func init() {
-	loadPromptFile("en", "prompts/en.json")
-	loadPromptFile("ru", "prompts/ru.json")
-	loadPromptFile("zh", "prompts/zh.json")
+	loadPromptFile("en", filepath.Join(promptsBasePath, "en.json"))
+	loadPromptFile("ru", filepath.Join(promptsBasePath, "ru.json"))
+	loadPromptFile("zh", filepath.Join(promptsBasePath, "zh.json"))
 }
 
 func loadPromptFile(lang string, path string) {

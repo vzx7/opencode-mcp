@@ -151,6 +151,8 @@ func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 
 	p := GetPrompts(language)
 
+	sb.WriteString(ToolMarkerReview)
+	sb.WriteString("\n")
 	sb.WriteString(p.SystemRole)
 	sb.WriteString("\n\n## " + p.Labels["root"] + " ")
 	sb.WriteString(projectMap.Root)
@@ -196,6 +198,8 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, lan
 	p := GetPrompts(language)
 	c := p.Compliance
 
+	sb.WriteString(ToolMarkerCompliance)
+	sb.WriteString("\n")
 	sb.WriteString(c.SystemRole)
 	sb.WriteString("\n\n## Target Architecture Rules\n")
 	for _, layer := range rules.Layers {
@@ -233,6 +237,8 @@ func BuildModuleAuditPrompt(modulePath string, files map[string]string, language
 	p := GetPrompts(language)
 	m := p.ModuleAudit
 
+	sb.WriteString(ToolMarkerModuleAudit)
+	sb.WriteString("\n")
 	sb.WriteString(m.SystemRole)
 	sb.WriteString("\n\n## Module Path: ")
 	sb.WriteString(modulePath)

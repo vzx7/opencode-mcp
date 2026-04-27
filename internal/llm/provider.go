@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -10,25 +11,51 @@ type LLMProvider interface {
 	Name() string
 }
 
-func NewProvider(providerType string, apiKey string, endpoint string, model string) (LLMProvider, error) {
+const (
+	ToolMarkerReview       = "[TOOL: architecture_review]"
+	ToolMarkerCompliance  = "[TOOL: architecture_compliance]"
+	ToolMarkerModuleAudit = "[TOOL: module_audit]"
+)
+
+func getDefaultEndpoint(providerType string) string {
 	switch providerType {
-	case "mock":
-		return NewMockProvider(), nil
+	case "anthropic":
+		return "https://api.anthropic.com/v1/messages"
+	case "openai", "":
+		fallthrough
+	default:
+		return "https://api.openai.com/v1/chat/completions"
+	}
+}
+
+var validProviders = map[string]bool{
+	"mock":     true,
+	"openai":   true,
+	"anthropic": true,
+}
+
+func NewProvider(providerType string, apiKey string, endpoint string, model string) (LLMProvider, error) {
+	if providerType != "mock" && providerType != "" && apiKey == "" {
+		return nil, fmt.Errorf("API key is required for provider %q", providerType)
+	}
+
+	if providerType != "" && !validProviders[providerType] {
+		return nil, fmt.Errorf("unknown provider %q", providerType)
+	}
+
+	if endpoint == "" {
+		endpoint = getDefaultEndpoint(providerType)
+	}
+
+	switch providerType {
 	case "openai":
-		actualEndpoint := endpoint
-		if endpoint == "" {
-			actualEndpoint = "https://api.openai.com/v1/chat/completions"
-		}
-		return NewOpenAIProvider(apiKey, actualEndpoint, model), nil
+		return NewOpenAIProvider(apiKey, endpoint, model), nil
 	case "anthropic":
 		return NewAnthropicProvider(apiKey, endpoint, model), nil
+	case "mock", "":
+		fallthrough
 	default:
-		// Any OpenAI-compatible provider
-		actualEndpoint := endpoint
-		if endpoint == "" {
-			actualEndpoint = "https://api.openai.com/v1/chat/completions"
-		}
-		return NewOpenAIProvider(apiKey, actualEndpoint, model), nil
+		return NewMockProvider(), nil
 	}
 }
 
@@ -61,7 +88,12 @@ func NewMockProvider() *MockProvider {
 }
 
 func (p *MockProvider) Complete(ctx context.Context, prompt string, language string) (string, error) {
+	if prompt == "" {
+		return "", fmt.Errorf("prompt cannot be empty")
+	}
+
 	toolName := extractToolName(prompt)
+
 	if resp, ok := p.responses[toolName]; ok {
 		if langResp, ok := resp[language]; ok {
 			return langResp, nil
@@ -70,22 +102,31 @@ func (p *MockProvider) Complete(ctx context.Context, prompt string, language str
 			return langResp, nil
 		}
 	}
-	return "Mock: No response found", nil
+	return "", fmt.Errorf("mock provider: no response found for tool=%q, lang=%q", toolName, language)
 }
 
 func extractToolName(prompt string) string {
+	if strings.Contains(prompt, ToolMarkerReview) {
+		return "architecture_review"
+	}
+	if strings.Contains(prompt, ToolMarkerCompliance) {
+		return "architecture_compliance"
+	}
+	if strings.Contains(prompt, ToolMarkerModuleAudit) {
+		return "module_audit"
+	}
+
 	lines := strings.Split(prompt, "\n")
 	for _, line := range lines {
-		if strings.Contains(line, "You are performing") || strings.Contains(line, "Вы выполняете") || strings.Contains(line, "您正在执行") || strings.Contains(line, "执行架构审查") {
-			if strings.Contains(line, "architecture review") || strings.Contains(line, "обзор архитектуры") || strings.Contains(line, "架构审查") {
-				return "architecture_review"
-			}
-			if strings.Contains(line, "compliance") || strings.Contains(line, "соответстви") || strings.Contains(line, "合规") {
-				return "architecture_compliance"
-			}
-			if strings.Contains(line, "module audit") || strings.Contains(line, "аудит модуля") || strings.Contains(line, "模块审计") {
-				return "module_audit"
-			}
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "architecture review") || strings.Contains(lower, "обзор архитектуры") || strings.Contains(lower, "架构审查") {
+			return "architecture_review"
+		}
+		if strings.Contains(lower, "compliance") || strings.Contains(lower, "соответстви") || strings.Contains(lower, "合规") {
+			return "architecture_compliance"
+		}
+		if strings.Contains(lower, "module audit") || strings.Contains(lower, "аудит модуля") || strings.Contains(lower, "模块审计") {
+			return "module_audit"
 		}
 	}
 	return "architecture_review"
