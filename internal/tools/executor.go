@@ -28,6 +28,51 @@ func validatePath(p string) error {
 	return nil
 }
 
+// sensitiveNamePatterns lists substrings that, if found in a filename (lowercase),
+// indicate the file likely contains secrets and must never be sent to an LLM.
+var sensitiveNamePatterns = []string{
+	"credential", "secret", "password", "passwd", "apikey", "api_key",
+	"private_key", "privatekey", "access_key", "auth_token",
+}
+
+// sensitiveExtensions lists file extensions that indicate cryptographic material.
+var sensitiveExtensions = map[string]bool{
+	".key": true, ".pem": true, ".p12": true, ".pfx": true,
+	".cert": true, ".crt": true, ".jks": true, ".keystore": true,
+	".asc": true, ".gpg": true,
+}
+
+// isSensitiveFile returns true if the file must never be sent to an LLM,
+// regardless of its source-code extension.
+func isSensitiveFile(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+
+	// .env and all variants: .env, .env.local, .env.production, config.env, etc.
+	if name == ".env" || strings.HasPrefix(name, ".env.") || strings.HasSuffix(name, ".env") {
+		return true
+	}
+
+	// SSH private key filenames (no extension)
+	switch name {
+	case "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa", "id_rsa.pub", "id_ed25519.pub":
+		return true
+	}
+
+	// Cryptographic material by extension
+	if sensitiveExtensions[filepath.Ext(name)] {
+		return true
+	}
+
+	// Sensitive name substrings (e.g. secrets.go, credentials.py)
+	for _, pat := range sensitiveNamePatterns {
+		if strings.Contains(name, pat) {
+			return true
+		}
+	}
+
+	return false
+}
+
 const (
 	defaultModelAnthropic = "claude-3-5-sonnet-20241022"
 	defaultModelOpenAI    = "gpt-4o"
@@ -351,6 +396,8 @@ func (te *ToolExecutor) enrichWithGraphAnalysis(report *domain.AuditReport, grap
 type ArchitectureComplianceInput struct {
 	ToolInput
 	TargetArchitecture *domain.ArchitectureRules `json:"target_architecture"`
+	Docs               string                    `json:"docs,omitempty"`
+	IncludePaths       []string                  `json:"include_paths,omitempty"`
 }
 
 func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input ArchitectureComplianceInput) (*domain.AuditReport, error) {
@@ -381,13 +428,21 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 
 	report := analyzerEngine.CheckCompliance(rules, pm)
 
+	var docsContent map[string]string
+	var docsOrder []string
+	if input.Docs != "" {
+		docsContent, docsOrder, _ = te.readDocsContent(input.Docs, projectPath)
+	}
+
+	snapshot, snapshotOrder, snapshotOmitted := te.buildCodeSnapshot(projectPath, input.IncludePaths, 60_000, analyzerEngine)
+
 	llmProvider, err := te.getLLM(input.Provider, input.LLM)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM: %w", err)
 	}
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
-		prompt := llm.BuildCompliancePrompt(rules, pm, graph, language)
+		prompt := llm.BuildCompliancePrompt(rules, pm, graph, docsContent, docsOrder, snapshot, snapshotOrder, snapshotOmitted, analyzerEngine.SnippetLang(), language)
 
 		te.mu.RLock()
 		debug := te.debug
@@ -566,6 +621,62 @@ func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string, engine
 	return content, nil
 }
 
+func (te *ToolExecutor) readDocsContent(docsPath, projectRoot string) (map[string]string, []string, error) {
+	content := make(map[string]string)
+	var order []string
+
+	absDocsPath := docsPath
+	if !filepath.IsAbs(docsPath) {
+		absDocsPath = filepath.Join(projectRoot, docsPath)
+	}
+	absDocsPath, _ = filepath.Abs(absDocsPath)
+
+	info, err := os.Stat(absDocsPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docs path not found: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("docs path must be a directory: %s", docsPath)
+	}
+
+	const maxDocsChars = 80_000
+	docExts := map[string]bool{
+		".md": true, ".txt": true, ".adoc": true, ".rst": true,
+	}
+	totalChars := 0
+
+	_ = filepath.Walk(absDocsPath, func(path string, fi fs.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if fi.IsDir() {
+			if strings.HasPrefix(fi.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !docExts[strings.ToLower(filepath.Ext(path))] {
+			return nil
+		}
+		if isSensitiveFile(path) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || totalChars+len(data) > maxDocsChars {
+			return nil
+		}
+		relPath, _ := filepath.Rel(projectRoot, path)
+		relPath = filepath.ToSlash(relPath)
+		content[relPath] = string(data)
+		order = append(order, relPath)
+		totalChars += len(data)
+		return nil
+	})
+
+	sort.Strings(order)
+	return content, order, nil
+}
+
 type fileSize struct {
 	path string
 	size int64
@@ -588,7 +699,7 @@ func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []str
 			if err != nil || info.IsDir() {
 				continue
 			}
-			if engine.IsSourceFile(absPath) {
+			if engine.IsSourceFile(absPath) && !isSensitiveFile(absPath) {
 				files = append(files, fileSize{path: absPath, size: info.Size()})
 			}
 		}
@@ -603,7 +714,7 @@ func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []str
 				}
 				return nil
 			}
-			if engine.IsSourceFile(path) {
+			if engine.IsSourceFile(path) && !isSensitiveFile(path) {
 				files = append(files, fileSize{path: path, size: info.Size()})
 			}
 			return nil

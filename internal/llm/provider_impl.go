@@ -469,7 +469,18 @@ func appendJSONSchema(sb *strings.Builder, language string) {
 	sb.WriteString(GetJSONSchema(language))
 }
 
-func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, graph *ImportGraph, language string) string {
+func BuildCompliancePrompt(
+	rules *ArchitectureRules,
+	projectMap *ProjectMap,
+	graph *ImportGraph,
+	docsContent map[string]string,
+	docsOrder []string,
+	snapshot map[string]string,
+	snapshotOrder []string,
+	snapshotOmitted []string,
+	snippetLang string,
+	language string,
+) string {
 	var sb strings.Builder
 
 	p := GetPrompts(language)
@@ -479,12 +490,17 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, gra
 			Labels: map[string]string{
 				"compliance_rules_section":    "Compliance Rules",
 				"compliance_layer_label":       "Layer",
-				"paths":                      "Paths",
-				"allowed":                    "Allowed",
+				"paths":                       "Paths",
+				"allowed":                     "Allowed",
 				"compliance_structure_section": "Project Structure",
-				"root":                       "Root",
-				"layers":                     "Layers",
-				"import_graph_section":         "Import Graph",
+				"root":                        "Root",
+				"layers":                      "Layers",
+				"import_graph_section":        "Import Graph",
+				"docs_section":                "## Architecture Documentation",
+				"docs_note":                   "The following documentation describes the intended architecture.",
+				"compliance_snapshot_section": "## Key Source Files",
+				"compliance_snapshot_note":    "Architecturally significant files selected for compliance review:",
+				"compliance_omitted_note":     "%d file(s) omitted from snapshot: %s",
 			},
 		}
 	}
@@ -496,7 +512,26 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, gra
 	sb.WriteString(ToolMarkerCompliance)
 	sb.WriteString("\n")
 	sb.WriteString(c.SystemRole)
-	sb.WriteString("\n\n" + p.Labels["compliance_rules_section"] + "\n")
+
+	// Documentation section — ground truth for compliance evaluation
+	if len(docsOrder) > 0 {
+		sb.WriteString("\n\n" + p.Labels["docs_section"] + "\n")
+		sb.WriteString(p.Labels["docs_note"] + "\n\n")
+		for _, path := range docsOrder {
+			content, ok := docsContent[path]
+			if !ok {
+				continue
+			}
+			sb.WriteString("### ")
+			sb.WriteString(path)
+			sb.WriteString("\n\n")
+			sb.WriteString(content)
+			sb.WriteString("\n\n")
+		}
+	}
+
+	// Rules section
+	sb.WriteString("\n" + p.Labels["compliance_rules_section"] + "\n")
 	for _, layer := range rules.Layers {
 		sb.WriteString(p.Labels["compliance_layer_label"] + " ")
 		sb.WriteString(layer.Name)
@@ -506,6 +541,8 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, gra
 		sb.WriteString(strings.Join(layer.Allow, ", "))
 		sb.WriteString("\n")
 	}
+
+	// Project structure
 	sb.WriteString("\n" + p.Labels["compliance_structure_section"] + "\n")
 	sb.WriteString(p.Labels["root"] + " ")
 	sb.WriteString(projectMap.Root)
@@ -517,6 +554,28 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, gra
 		sb.WriteString(strings.Join(l.Paths, ", "))
 		sb.WriteString("\n")
 	}
+
+	// Code snapshot — key source files
+	if len(snapshotOrder) > 0 {
+		sb.WriteString("\n" + p.Labels["compliance_snapshot_section"] + "\n")
+		sb.WriteString(p.Labels["compliance_snapshot_note"] + "\n\n")
+		for _, path := range snapshotOrder {
+			content := snapshot[path]
+			sb.WriteString("### ")
+			sb.WriteString(path)
+			sb.WriteString("\n```")
+			sb.WriteString(snippetLang)
+			sb.WriteString("\n")
+			sb.WriteString(content)
+			sb.WriteString("\n```\n\n")
+		}
+		if len(snapshotOmitted) > 0 {
+			sb.WriteString(fmt.Sprintf("> "+p.Labels["compliance_omitted_note"]+"\n\n",
+				len(snapshotOmitted), strings.Join(snapshotOmitted, ", ")))
+		}
+	}
+
+	// Import graph
 	if graph != nil {
 		sb.WriteString("\n" + p.Labels["import_graph_section"] + "\n")
 		for pkg, imports := range graph.Edges {
@@ -547,6 +606,7 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, gra
 			}
 		}
 	}
+
 	sb.WriteString("\n" + c.SeverityGuide)
 	sb.WriteString("\n\n" + c.IdentifyViolations)
 	sb.WriteString("\n" + c.ReturnFormat)

@@ -272,9 +272,13 @@ func TestBuildPrompts(t *testing.T) {
 	})
 
 	t.Run("BuildCompliancePrompt contains marker", func(t *testing.T) {
-		prompt := BuildCompliancePrompt(&domain.ArchitectureRules{
-			Layers: []domain.LayerRule{{Name: "cmd", Paths: []string{"cmd"}, Allow: []string{"main"}}},
-		}, &domain.ProjectMap{Root: "/test", Layers: []domain.ArchitectureLayer{}}, nil, "en")
+		prompt := BuildCompliancePrompt(
+			&domain.ArchitectureRules{
+				Layers: []domain.LayerRule{{Name: "cmd", Paths: []string{"cmd"}, Allow: []string{"main"}}},
+			},
+			&domain.ProjectMap{Root: "/test", Layers: []domain.ArchitectureLayer{}},
+			nil, nil, nil, nil, nil, nil, "go", "en",
+		)
 		if !contains(prompt, ToolMarkerCompliance) {
 			t.Error("expected tool marker in compliance prompt")
 		}

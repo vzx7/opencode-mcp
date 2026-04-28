@@ -23,7 +23,12 @@
     "module_path_label": "## 模块:",
     "module_source_label": "## 源代码",
     "hotspots_section": "## Git热点",
-    "hotspots_note": "最常修改的文件（变更集中点 — 请仔细审查耦合度和复杂性）："
+    "hotspots_note": "最常修改的文件（变更集中点 — 请仔细审查耦合度和复杂性）：",
+    "docs_section": "## 架构文档",
+    "docs_note": "以下文档描述了预期的架构。在评估合规性时，将其作为基准参考。",
+    "compliance_snapshot_section": "## 关键源文件",
+    "compliance_snapshot_note": "为合规性审查选择的架构重要文件：",
+    "compliance_omitted_note": "%d 个文件因大小限制而从快照中省略：%s"
   },
   "review_focus": [
     "使用导入图识别：高fan-in包（脆弱基础）、高fan-out包（不稳定依赖方）以及层间依赖方向违规",

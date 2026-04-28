@@ -245,6 +245,14 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 							Type:        "object",
 							Description: "Описание целевой архитектуры (rules / constraints)",
 						},
+						"docs": {
+							Type:        "string",
+							Description: "Относительный путь к директории с архитектурной документацией (ADR, спецификации). Содержимое передаётся в LLM как эталон архитектуры",
+						},
+						"include_paths": {
+							Type:        "array",
+							Description: "Список путей к ключевым файлам для анализа (относительно project_path). Позволяет передать архитектурно значимые файлы для LLM",
+						},
 						"language": {
 							Type:        "string",
 							Description: "Язык ответа (ru, en)",
@@ -368,6 +376,16 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 			if ta, ok := arguments["target_architecture"].(map[string]interface{}); ok {
 				taJSON, _ := json.Marshal(ta)
 				json.Unmarshal(taJSON, &input.TargetArchitecture)
+			}
+			if d, ok := arguments["docs"].(string); ok {
+				input.Docs = d
+			}
+			if raw, ok := arguments["include_paths"].([]interface{}); ok {
+				for _, v := range raw {
+					if sv, ok := v.(string); ok {
+						input.IncludePaths = append(input.IncludePaths, sv)
+					}
+				}
 			}
 			if l, ok := arguments["language"].(string); ok {
 				input.Language = l

@@ -30,16 +30,16 @@ cp .env.example .env
 
 ### .env Parameters
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PROVIDER` | LLM provider (`mock`, `openai`, `anthropic`) | `mock` |
-| `LLM` | Model | `gpt-4o` |
-| `OPENAI_API_KEY` | OpenAI API key | - |
-| `ANTHROPIC_API_KEY` | Anthropic API key | - |
-| `ENDPOINT` | Custom endpoint (for OpenAI-compatible APIs) | - |
-| `PROJECT` | Project path | current directory |
-| `PORT` | Port | `8080` |
-| `LANGUAGE` | Response language (`ru`, `en`, `zh`) | `ru` |
+| Variable            | Description                                  | Default           |
+| ---------------------| ----------------------------------------------| -------------------|
+| `PROVIDER`          | LLM provider (`mock`, `openai`, `anthropic`) | `mock`            |
+| `LLM`               | Model                                        | `gpt-4o`          |
+| `OPENAI_API_KEY`    | OpenAI API key                               | -                 |
+| `ANTHROPIC_API_KEY` | Anthropic API key                            | -                 |
+| `ENDPOINT`          | Custom endpoint (for OpenAI-compatible APIs) | -                 |
+| `PROJECT`           | Project path                                 | current directory |
+| `PORT`              | Port                                         | `8080`            |
+| `LANGUAGE`          | Response language (`ru`, `en`, `zh`)         | `ru`              |
 
 > **Note:** HTTP timeout for LLM requests is 10 minutes (suitable for long responses).
 

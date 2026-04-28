@@ -23,7 +23,12 @@
     "module_path_label": "## Module:",
     "module_source_label": "## Source Code",
     "hotspots_section": "## Git Hotspots",
-    "hotspots_note": "Top frequently-modified files (change magnets — review coupling and complexity carefully):"
+    "hotspots_note": "Top frequently-modified files (change magnets — review coupling and complexity carefully):",
+    "docs_section": "## Architecture Documentation",
+    "docs_note": "The following documentation describes the intended architecture. Use it as the ground truth when evaluating compliance.",
+    "compliance_snapshot_section": "## Key Source Files",
+    "compliance_snapshot_note": "Architecturally significant files selected for compliance review:",
+    "compliance_omitted_note": "%d file(s) omitted from snapshot due to size limit: %s"
   },
   "review_focus": [
     "Use the import graph to identify high fan-in packages (fragile foundations), high fan-out packages (unstable dependents), and dependency direction violations between layers",
