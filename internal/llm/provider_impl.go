@@ -330,7 +330,7 @@ func (e *notImplementedError) Error() string {
 	return e.msg
 }
 
-func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
+func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitted []string, graph *ImportGraph, metrics []FileMetric, language string) string {
 	var sb strings.Builder
 
 	p := GetPrompts(language)
@@ -358,9 +358,73 @@ func BuildReviewPrompt(projectMap *ProjectMap, language string) string {
 		sb.WriteString(strings.Join(l.Paths, ", "))
 		sb.WriteString("\n")
 	}
+
+	sb.WriteString("\n## Source Code Snapshot\n")
+	for path, content := range snapshot {
+		sb.WriteString("### ")
+		sb.WriteString(path)
+		sb.WriteString("\n```go\n")
+		sb.WriteString(content)
+		sb.WriteString("\n```\n\n")
+	}
+	if len(omitted) > 0 {
+		sb.WriteString(fmt.Sprintf("> **Note:** %d file(s) omitted from snapshot due to 100 000 char limit — their structure is still reflected in the import graph and metrics below: %s\n\n",
+			len(omitted), strings.Join(omitted, ", ")))
+	}
+
+	sb.WriteString("\n## Import Graph\n")
+	for pkg, imports := range graph.Edges {
+		sb.WriteString("- ")
+		sb.WriteString(pkg)
+		sb.WriteString(" → ")
+		sb.WriteString(strings.Join(imports, ", "))
+		sb.WriteString("\n")
+	}
+
+	if len(graph.Cycles) > 0 {
+		sb.WriteString("\n### Cycles Detected [CYCLE]\n")
+		for _, cycle := range graph.Cycles {
+			sb.WriteString("- ")
+			sb.WriteString(strings.Join(cycle, " → "))
+			sb.WriteString("\n")
+		}
+	}
+
+	if len(graph.LayerViolations) > 0 {
+		sb.WriteString("\n### Layer Violations [LAYER VIOLATION]\n")
+		for _, v := range graph.LayerViolations {
+			sb.WriteString("- ")
+			sb.WriteString(v.From)
+			sb.WriteString(" → ")
+			sb.WriteString(v.To)
+			sb.WriteString(": ")
+			sb.WriteString(v.Message)
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("\n## File Metrics\n")
+	sb.WriteString("| File | Lines | Exported Funcs | Exported Types | Has Tests |\n")
+	sb.WriteString("|------|-------|----------------|----------------|----------|\n")
+	for _, m := range metrics {
+		if m.Lines > 500 {
+			sb.WriteString("| **")
+			sb.WriteString(m.Path)
+			sb.WriteString("** (large) | ")
+		} else {
+			sb.WriteString("| ")
+			sb.WriteString(m.Path)
+			sb.WriteString(" | ")
+		}
+		sb.WriteString(fmt.Sprintf("%d | %d | %d | %v |\n", m.Lines, m.ExportedFuncs, m.ExportedTypes, m.HasTests))
+	}
+
 	sb.WriteString("\nProvide a structured architecture review focusing on:\n")
+	sb.WriteString("1. Identify coupling hotspots based on the import graph\n")
+	sb.WriteString("2. Comment on the size and responsibility of large files\n")
+	sb.WriteString("3. Assess whether the public API surface (exported symbols) is appropriate per layer\n")
 	for i, focus := range p.ReviewFocus {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, focus))
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+4, focus))
 	}
 	sb.WriteString("\n")
 	sb.WriteString(p.JSONSchemaInstruction)

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -127,6 +128,18 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("failed to build project map: %w", err)
 	}
 
+	graph, err := analyzerEngine.BuildImportGraph(pm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build import graph: %w", err)
+	}
+
+	metrics, err := analyzerEngine.CollectFileMetrics(pm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect file metrics: %w", err)
+	}
+
+	snapshot, omitted := te.buildCodeSnapshot(projectPath, 100000)
+
 	llmProvider, err := te.getLLM(input.Provider, input.LLM)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM: %w", err)
@@ -135,7 +148,7 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("LLM provider is nil")
 	}
 	language := te.getLanguage(input.Language)
-	prompt := llm.BuildReviewPrompt(pm, language)
+	prompt := llm.BuildReviewPrompt(pm, snapshot, omitted, graph, metrics, language)
 
 	te.mu.RLock()
 	debug := te.debug
@@ -160,6 +173,7 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 
 	report := te.buildReportFromLLM(llmResponse)
 	te.enrichWithLocalAnalysis(report, pm)
+	te.enrichWithGraphAnalysis(report, graph, metrics)
 
 	return report, nil
 }
@@ -251,6 +265,67 @@ func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *
 
 	if !hasCmd {
 		report.Recommendations = append(report.Recommendations, "Consider adding cmd/ for entrypoints")
+	}
+
+	if report.Score < 0 {
+		report.Score = 0
+	}
+}
+
+func (te *ToolExecutor) enrichWithGraphAnalysis(report *domain.AuditReport, graph *domain.ImportGraph, metrics []domain.FileMetric) {
+	packagesWithFiles := make(map[string]bool)
+	packagesWithTests := make(map[string]bool)
+
+	for _, m := range metrics {
+		dir := filepath.Dir(m.Path)
+		packagesWithFiles[dir] = true
+		if m.HasTests {
+			packagesWithTests[dir] = true
+		}
+	}
+
+	for _, cycle := range graph.Cycles {
+		report.Issues = append(report.Issues, domain.Issue{
+			Severity:   domain.SeverityCritical,
+			Message:    fmt.Sprintf("Import cycle detected: %s", strings.Join(cycle, " → ")),
+			Location:   strings.Join(cycle, ", "),
+			Suggestion: "Break the cycle by introducing an interface or restructuring dependencies",
+		})
+		report.Score -= 20
+	}
+
+	for _, v := range graph.LayerViolations {
+		report.Issues = append(report.Issues, domain.Issue{
+			Severity:   domain.SeverityHigh,
+			Message:    v.Message,
+			Location:   v.From,
+			Suggestion: fmt.Sprintf("Ensure %s does not depend on %s", v.From, v.To),
+		})
+		report.Score -= 10
+	}
+
+	for _, m := range metrics {
+		if m.Lines > 500 {
+			report.Issues = append(report.Issues, domain.Issue{
+				Severity:   domain.SeverityMedium,
+				Message:    fmt.Sprintf("Large file: %s (%d lines)", m.Path, m.Lines),
+				Location:   m.Path,
+				Suggestion: "Consider splitting into smaller files with single responsibilities",
+			})
+			report.Score -= 5
+		}
+	}
+
+	for pkg := range packagesWithFiles {
+		if !packagesWithTests[pkg] {
+			report.Issues = append(report.Issues, domain.Issue{
+				Severity:   domain.SeverityLow,
+				Message:    fmt.Sprintf("Package has no test files: %s", pkg),
+				Location:   pkg,
+				Suggestion: "Add unit tests for this package",
+			})
+			report.Score -= 2
+		}
 	}
 
 	if report.Score < 0 {
@@ -439,4 +514,57 @@ func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string) (map[s
 	}
 
 	return content, nil
+}
+
+type fileSize struct {
+	path string
+	size int64
+}
+
+func (te *ToolExecutor) buildCodeSnapshot(projectPath string, maxChars int) (map[string]string, []string) {
+	snapshot := make(map[string]string)
+	var omitted []string
+
+	var files []fileSize
+	filepath.Walk(projectPath, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+			files = append(files, fileSize{path: path, size: info.Size()})
+		}
+		return nil
+	})
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].size > files[j].size
+	})
+
+	totalChars := 0
+	for _, f := range files {
+		relPath, _ := filepath.Rel(projectPath, f.path)
+		relPath = filepath.ToSlash(relPath)
+
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			continue
+		}
+
+		chars := len(data)
+		if totalChars+chars > maxChars {
+			omitted = append(omitted, relPath)
+			continue
+		}
+
+		snapshot[relPath] = string(data)
+		totalChars += chars
+	}
+
+	return snapshot, omitted
 }

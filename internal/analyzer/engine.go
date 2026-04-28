@@ -3,6 +3,9 @@ package analyzer
 import (
 	"bufio"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"log"
 	"os"
@@ -228,6 +231,273 @@ func (a *Analyzer) analyzeGoMod(pm *domain.ProjectMap) {
 			pm.Dependencies["github.com"] = append(pm.Dependencies["github.com"], dep)
 		}
 	}
+}
+
+func (a *Analyzer) BuildImportGraph(pm *domain.ProjectMap) (*domain.ImportGraph, error) {
+	graph := &domain.ImportGraph{
+		Edges:           make(map[string][]string),
+		Cycles:          [][]string{},
+		LayerViolations: []domain.LayerViolation{},
+	}
+
+	modulePrefix := a.getModulePrefix()
+
+	fset := token.NewFileSet()
+
+	err := filepath.Walk(a.rootPath, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".go") || strings.HasSuffix(info.Name(), "_test.go") {
+			return nil
+		}
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		f, err := parser.ParseFile(fset, path, src, parser.ImportsOnly)
+		if err != nil {
+			return nil
+		}
+
+		pkgPath, _ := filepath.Rel(a.rootPath, filepath.Dir(path))
+		pkgPath = filepath.ToSlash(pkgPath)
+
+		for _, imp := range f.Imports {
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			if strings.HasPrefix(importPath, modulePrefix) {
+				importPath = strings.TrimPrefix(importPath, modulePrefix)
+				importPath = strings.TrimPrefix(importPath, "/")
+				graph.Edges[pkgPath] = append(graph.Edges[pkgPath], importPath)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build import graph: %w", err)
+	}
+
+	graph.Cycles = findCycles(graph.Edges)
+	graph.LayerViolations = findLayerViolations(graph.Edges)
+
+	return graph, nil
+}
+
+func (a *Analyzer) getModulePrefix() string {
+	goModPath := filepath.Join(a.rootPath, "go.mod")
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.Fields(line)[1]
+		}
+	}
+	return ""
+}
+
+func findCycles(edges map[string][]string) [][]string {
+	cycles := [][]string{}
+	visited := make(map[string]bool)
+	inStack := make(map[string]bool)
+	path := []string{}
+
+	var dfs func(node string)
+	dfs = func(node string) {
+		visited[node] = true
+		inStack[node] = true
+		path = append(path, node)
+
+		for _, dep := range edges[node] {
+			if !visited[dep] {
+				dfs(dep)
+			} else if inStack[dep] {
+				if idx := indexOf(path, dep); idx != -1 {
+					cycle := make([]string, len(path)-idx)
+					copy(cycle, path[idx:])
+					cycles = append(cycles, cycle)
+				}
+			}
+		}
+
+		path = path[:len(path)-1]
+		inStack[node] = false
+	}
+
+	for node := range edges {
+		if !visited[node] {
+			dfs(node)
+		}
+	}
+
+	return cycles
+}
+
+func indexOf(slice []string, s string) int {
+	for i, v := range slice {
+		if v == s {
+			return i
+		}
+	}
+	return -1
+}
+
+var layerOrder = []string{"domain", "analyzer", "llm", "tools", "mcp"}
+
+func findLayerViolations(edges map[string][]string) []domain.LayerViolation {
+	violations := []domain.LayerViolation{}
+
+	for from, deps := range edges {
+		fromLayer := getLayerName(from)
+		if fromLayer == "" {
+			continue
+		}
+
+		for _, to := range deps {
+			toLayer := getLayerName(to)
+			if toLayer == "" {
+				continue
+			}
+
+			if isLayerViolation(fromLayer, toLayer) {
+				violations = append(violations, domain.LayerViolation{
+					From:    from,
+					To:      to,
+					Message: fmt.Sprintf("Layer violation: %s (%s) imports %s (%s)", from, fromLayer, to, toLayer),
+				})
+			}
+		}
+	}
+
+	return violations
+}
+
+func getLayerName(pkgPath string) string {
+	for _, layer := range layerOrder {
+		if strings.Contains(pkgPath, layer) {
+			return layer
+		}
+	}
+	return ""
+}
+
+func isLayerViolation(fromLayer, toLayer string) bool {
+	fromIdx := -1
+	toIdx := -1
+
+	for i, l := range layerOrder {
+		if l == fromLayer {
+			fromIdx = i
+		}
+		if l == toLayer {
+			toIdx = i
+		}
+	}
+
+	if fromIdx == -1 || toIdx == -1 {
+		return false
+	}
+
+	return fromIdx < toIdx
+}
+
+func (a *Analyzer) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetric, error) {
+	metrics := []domain.FileMetric{}
+
+	err := filepath.Walk(a.rootPath, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".go") || strings.HasSuffix(info.Name(), "_test.go") {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(a.rootPath, path)
+		relPath = filepath.ToSlash(relPath)
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		lines := strings.Count(string(src), "\n") + 1
+		exportedFuncs, exportedTypes := countExportedSymbols(src)
+
+		hasTests := hasTestFile(path)
+
+		metrics = append(metrics, domain.FileMetric{
+			Path:           relPath,
+			Lines:          lines,
+			ExportedFuncs:  exportedFuncs,
+			ExportedTypes:  exportedTypes,
+			HasTests:       hasTests,
+		})
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect file metrics: %w", err)
+	}
+
+	return metrics, nil
+}
+
+func countExportedSymbols(src []byte) (funcs int, types int) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", src, parser.ParseComments)
+	if err != nil {
+		return 0, 0
+	}
+
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Name != nil && d.Name.IsExported() {
+				funcs++
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					if s.Name != nil && s.Name.IsExported() {
+						types++
+					}
+				}
+			}
+		}
+	}
+
+	return
+}
+
+func hasTestFile(path string) bool {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	name := base[:len(base)-len(ext)]
+	testName := name + "_test.go"
+	testPath := filepath.Join(dir, testName)
+
+	_, err := os.Stat(testPath)
+	return err == nil
 }
 
 func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.ProjectMap) *domain.AuditReport {

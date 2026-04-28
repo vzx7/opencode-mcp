@@ -251,7 +251,8 @@ func TestBuildPrompts(t *testing.T) {
 			Modules: []domain.Module{{Name: "test", Path: "test.go"}},
 			Layers:  []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
-		prompt := BuildReviewPrompt(pm, "en")
+		graph := &ImportGraph{Edges: make(map[string][]string)}
+		prompt := BuildReviewPrompt(pm, nil, nil, graph, nil, "en")
 		if !contains(prompt, ToolMarkerReview) {
 			t.Error("expected tool marker in review prompt")
 		}
@@ -263,7 +264,8 @@ func TestBuildPrompts(t *testing.T) {
 			Modules: []domain.Module{{Name: "test", Path: "test.go"}},
 			Layers:  []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
-		prompt := BuildReviewPrompt(pm, "ru")
+		graph := &ImportGraph{Edges: make(map[string][]string)}
+		prompt := BuildReviewPrompt(pm, nil, nil, graph, nil, "ru")
 		if !contains(prompt, "Модули:") {
 			t.Error("expected russian labels")
 		}

@@ -61,3 +61,23 @@ type ArchitectureLayer struct {
 	Name string   `json:"name"`
 	Paths []string `json:"paths"`
 }
+
+type ImportGraph struct {
+	Edges           map[string][]string `json:"edges"`
+	Cycles          [][]string          `json:"cycles"`
+	LayerViolations []LayerViolation    `json:"layer_violations"`
+}
+
+type LayerViolation struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Message string `json:"message"`
+}
+
+type FileMetric struct {
+	Path           string `json:"path"`
+	Lines          int    `json:"lines"`
+	ExportedFuncs  int    `json:"exported_funcs"`
+	ExportedTypes  int    `json:"exported_types"`
+	HasTests       bool   `json:"has_tests"`
+}

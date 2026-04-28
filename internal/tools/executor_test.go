@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vzx7/opencode-mcp/internal/domain"
@@ -304,6 +305,166 @@ func TestArchitectureReview(t *testing.T) {
 		_, err := te.ArchitectureReview(context.Background(), input)
 		if err != nil {
 			t.Logf("ArchitectureReview error: %v", err)
+		}
+	})
+}
+
+func TestBuildCodeSnapshot(t *testing.T) {
+	mockLLM := &mockProvider{name: "mock"}
+	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
+
+	t.Run("includes go files sorted by size", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "big.go"), []byte("package main\n"+string(make([]byte, 1000))), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "small.go"), []byte("package main"), 0644)
+
+		snapshot, omitted := te.buildCodeSnapshot(tmpDir, 5000)
+		if len(snapshot) != 2 {
+			t.Errorf("expected 2 files, got %d", len(snapshot))
+		}
+		if len(omitted) != 0 {
+			t.Errorf("expected 0 omitted, got %d", len(omitted))
+		}
+	})
+
+	t.Run("respects maxChars limit", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package main\n"+string(make([]byte, 2000))), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package main\n"+string(make([]byte, 2000))), 0644)
+
+		snapshot, omitted := te.buildCodeSnapshot(tmpDir, 2500)
+		if len(snapshot) == 0 {
+			t.Error("expected at least one file")
+		}
+		if len(omitted) == 0 {
+			t.Error("expected some files omitted")
+		}
+	})
+
+	t.Run("skips vendor and hidden dirs", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, "vendor"), 0755)
+		os.WriteFile(filepath.Join(tmpDir, "vendor", "dep.go"), []byte("package dep"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
+
+		snapshot, _ := te.buildCodeSnapshot(tmpDir, 5000)
+		if len(snapshot) != 1 {
+			t.Errorf("expected 1 file (skip vendor), got %d", len(snapshot))
+		}
+	})
+
+	t.Run("skips test files", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "app_test.go"), []byte("package main"), 0644)
+
+		snapshot, _ := te.buildCodeSnapshot(tmpDir, 5000)
+		if len(snapshot) != 1 {
+			t.Errorf("expected 1 file (skip test), got %d", len(snapshot))
+		}
+	})
+}
+
+func TestEnrichWithGraphAnalysis(t *testing.T) {
+	mockLLM := &mockProvider{name: "mock"}
+	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
+
+	t.Run("adds cycle as critical", func(t *testing.T) {
+		report := &domain.AuditReport{Score: 100, Issues: []domain.Issue{}}
+		graph := &domain.ImportGraph{
+			Cycles: [][]string{{"a", "b", "a"}},
+		}
+		metrics := []domain.FileMetric{}
+
+		te.enrichWithGraphAnalysis(report, graph, metrics)
+
+		found := false
+		for _, iss := range report.Issues {
+			if iss.Severity == domain.SeverityCritical && strings.Contains(iss.Message, "cycle") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected critical issue for cycle")
+		}
+		if report.Score >= 100 {
+			t.Error("expected score penalty for cycle")
+		}
+	})
+
+	t.Run("adds layer violation as high", func(t *testing.T) {
+		report := &domain.AuditReport{Score: 100, Issues: []domain.Issue{}}
+		graph := &domain.ImportGraph{
+			LayerViolations: []domain.LayerViolation{
+				{From: "internal/tools", To: "internal/domain", Message: "violation"},
+			},
+		}
+		metrics := []domain.FileMetric{}
+
+		te.enrichWithGraphAnalysis(report, graph, metrics)
+
+		found := false
+		for _, iss := range report.Issues {
+			if iss.Severity == domain.SeverityHigh && strings.Contains(iss.Message, "violation") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected high issue for layer violation")
+		}
+	})
+
+	t.Run("adds large file as medium", func(t *testing.T) {
+		report := &domain.AuditReport{Score: 100, Issues: []domain.Issue{}}
+		graph := &domain.ImportGraph{}
+		metrics := []domain.FileMetric{
+			{Path: "big.go", Lines: 600},
+		}
+
+		te.enrichWithGraphAnalysis(report, graph, metrics)
+
+		found := false
+		for _, iss := range report.Issues {
+			if iss.Severity == domain.SeverityMedium && strings.Contains(iss.Message, "big.go") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected medium issue for large file")
+		}
+	})
+
+	t.Run("adds missing tests as low", func(t *testing.T) {
+		report := &domain.AuditReport{Score: 100, Issues: []domain.Issue{}}
+		graph := &domain.ImportGraph{}
+		metrics := []domain.FileMetric{
+			{Path: "pkg/mypkg/app.go", Lines: 50, HasTests: false},
+		}
+
+		te.enrichWithGraphAnalysis(report, graph, metrics)
+
+		found := false
+		for _, iss := range report.Issues {
+			if iss.Severity == domain.SeverityLow && strings.Contains(iss.Message, "no test files") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected low issue for missing tests")
+		}
+	})
+
+	t.Run("score not negative", func(t *testing.T) {
+		report := &domain.AuditReport{Score: 10, Issues: []domain.Issue{}}
+		graph := &domain.ImportGraph{
+			Cycles: [][]string{{"a", "b"}},
+		}
+		metrics := []domain.FileMetric{}
+
+		te.enrichWithGraphAnalysis(report, graph, metrics)
+
+		if report.Score < 0 {
+			t.Errorf("score = %d, should not be negative", report.Score)
 		}
 	})
 }
