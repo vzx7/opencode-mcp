@@ -36,22 +36,22 @@ const (
 
 type ToolExecutor struct {
 	defaultPath string
-	defaultLLM llm.LLMProvider
+	defaultLLM  llm.LLMProvider
 	defaultLang string
-	endpoint  string
-	mu        sync.RWMutex
-	debug     bool
-	logger    *log.Logger
-	llmSem    chan struct{} // semaphore for LLM call concurrency limit
+	endpoint    string
+	mu          sync.RWMutex
+	debug       bool
+	logger      *log.Logger
+	llmSem      chan struct{}
 }
 
 type ToolExecutorConfig struct {
 	DefaultPath string
-	LLM       llm.LLMProvider
-	Endpoint  string
-	Language  string
-	Debug    bool
-	Logger   *log.Logger
+	LLM         llm.LLMProvider
+	Endpoint    string
+	Language    string
+	Debug       bool
+	Logger      *log.Logger
 }
 
 func NewToolExecutor(cfg ToolExecutorConfig) *ToolExecutor {
@@ -63,12 +63,12 @@ func NewToolExecutor(cfg ToolExecutorConfig) *ToolExecutor {
 	}
 	return &ToolExecutor{
 		defaultPath: cfg.DefaultPath,
-		defaultLLM: cfg.LLM,
+		defaultLLM:  cfg.LLM,
 		defaultLang: cfg.Language,
-		endpoint:   cfg.Endpoint,
-		debug:     cfg.Debug,
-		logger:    cfg.Logger,
-		llmSem:    make(chan struct{}, 3),
+		endpoint:    cfg.Endpoint,
+		debug:       cfg.Debug,
+		logger:      cfg.Logger,
+		llmSem:      make(chan struct{}, 3),
 	}
 }
 
@@ -95,11 +95,12 @@ func (te *ToolExecutor) releaseLLM() {
 }
 
 type ToolInput struct {
-	ProjectPath string `json:"project_path"`
-	ModulePath  string `json:"module_path,omitempty"`
-	Provider    string `json:"provider"`
-	LLM         string `json:"llm"`
-	Language    string `json:"language,omitempty"`
+	ProjectPath         string `json:"project_path"`
+	ModulePath          string `json:"module_path,omitempty"`
+	Provider            string `json:"provider"`
+	LLM                 string `json:"llm"`
+	Language            string `json:"language,omitempty"`
+	ProgrammingLanguage string `json:"programming_language,omitempty"`
 }
 
 func (te *ToolExecutor) getLLM(provider, model string) (llm.LLMProvider, error) {
@@ -154,13 +155,13 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, err
 	}
 
-	analyzerEngine := analyzer.New(projectPath)
+	analyzerEngine := analyzer.NewWithLang(projectPath, input.ProgrammingLanguage)
 	pm, err := analyzerEngine.BuildProjectMap()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build project map: %w", err)
 	}
 
-	graph, err := analyzerEngine.BuildImportGraph(pm)
+	graph, err := analyzerEngine.BuildImportGraph()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build import graph: %w", err)
 	}
@@ -170,7 +171,7 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("failed to collect file metrics: %w", err)
 	}
 
-	snapshot, snapshotOrder, omitted := te.buildCodeSnapshot(projectPath, input.IncludePaths, 100000)
+	snapshot, snapshotOrder, omitted := te.buildCodeSnapshot(projectPath, input.IncludePaths, 100000, analyzerEngine)
 
 	hotspots, _ := analyzerEngine.CollectGitHotspots(10)
 
@@ -204,7 +205,7 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("LLM provider is nil")
 	}
 	language := te.getLanguage(input.Language)
-	prompt := llm.BuildReviewPrompt(pm, snapshot, snapshotOrder, omitted, graph, metrics, hotspots, language)
+	prompt := llm.BuildReviewPrompt(pm, snapshot, snapshotOrder, omitted, graph, metrics, hotspots, analyzerEngine.SnippetLang(), language)
 
 	te.mu.RLock()
 	debug := te.debug
@@ -247,7 +248,6 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 // Falls back to a summary-only report if parsing fails.
 func parseLLMResponse(response string) *domain.AuditReport {
 	s := strings.TrimSpace(response)
-	// Strip optional ```json … ``` fences
 	if i := strings.Index(s, "```json"); i != -1 {
 		s = s[i+7:]
 		if j := strings.Index(s, "```"); j != -1 {
@@ -255,7 +255,6 @@ func parseLLMResponse(response string) *domain.AuditReport {
 		}
 		s = strings.TrimSpace(s)
 	}
-	// Find outermost JSON object
 	if i := strings.Index(s, "{"); i != -1 {
 		if j := strings.LastIndex(s, "}"); j > i {
 			s = s[i : j+1]
@@ -273,7 +272,6 @@ func parseLLMResponse(response string) *domain.AuditReport {
 		return &report
 	}
 
-	// Fallback: raw text in summary, neutral score
 	return &domain.AuditReport{
 		Score:           75,
 		Summary:         response,
@@ -290,17 +288,17 @@ func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *
 	if len(pm.Modules) == 0 {
 		report.Issues = append(report.Issues, domain.Issue{
 			Severity:   domain.SeverityHigh,
-			Message:    "No Go modules found in project",
+			Message:    "No modules found in project",
 			Location:   pm.Root,
-			Suggestion: "Ensure project has proper Go module structure",
+			Suggestion: "Ensure project has proper module structure",
 		})
 	}
 
 	if len(pm.Layers) < 2 {
 		report.Issues = append(report.Issues, domain.Issue{
 			Severity:   domain.SeverityMedium,
-			Message:   "Limited architecture layers detected",
-			Location:  pm.Root,
+			Message:    "Limited architecture layers detected",
+			Location:   pm.Root,
 			Suggestion: "Consider adopting layered architecture (cmd, internal, pkg)",
 		})
 	}
@@ -319,8 +317,8 @@ func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *
 	if !hasInternal {
 		report.Issues = append(report.Issues, domain.Issue{
 			Severity:   domain.SeverityLow,
-			Message:   "No internal layer found",
-			Location:  pm.Root,
+			Message:    "No internal layer found",
+			Location:   pm.Root,
 			Suggestion: "Consider adding internal package for private code",
 		})
 	}
@@ -368,13 +366,13 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 		return nil, err
 	}
 
-	analyzerEngine := analyzer.New(projectPath)
+	analyzerEngine := analyzer.NewWithLang(projectPath, input.ProgrammingLanguage)
 	pm, err := analyzerEngine.BuildProjectMap()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build project map: %w", err)
 	}
 
-	graph, _ := analyzerEngine.BuildImportGraph(pm)
+	graph, _ := analyzerEngine.BuildImportGraph()
 
 	rules := input.TargetArchitecture
 	if rules == nil {
@@ -465,13 +463,13 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 		return nil, err
 	}
 
-	analyzerEngine := analyzer.New(projectPath)
+	analyzerEngine := analyzer.NewWithLang(projectPath, input.ProgrammingLanguage)
 	report, err := analyzerEngine.AuditModule(modulePath, projectPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to audit module: %w", err)
 	}
 
-	moduleContent, err := te.readModuleContent(modulePath, projectPath)
+	moduleContent, err := te.readModuleContent(modulePath, projectPath, analyzerEngine)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read module content: %w", err)
 	}
@@ -482,7 +480,7 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 	}
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
-		prompt := llm.BuildModuleAuditPrompt(modulePath, moduleContent, language)
+		prompt := llm.BuildModuleAuditPrompt(modulePath, moduleContent, analyzerEngine.SnippetLang(), language)
 
 		te.mu.RLock()
 		debug := te.debug
@@ -518,7 +516,7 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 	return report, nil
 }
 
-func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string) (map[string]string, error) {
+func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string, engine *analyzer.Engine) (map[string]string, error) {
 	content := make(map[string]string)
 
 	absModulePath := modulePath
@@ -543,7 +541,7 @@ func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string) (map[s
 				}
 				return nil
 			}
-			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+			if engine.IsSourceFile(path) {
 				relPath, _ := filepath.Rel(projectRoot, path)
 				data, err := os.ReadFile(path)
 				if err == nil {
@@ -556,7 +554,7 @@ func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string) (map[s
 			return nil, err
 		}
 	} else {
-		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+		if engine.IsSourceFile(absModulePath) {
 			relPath, _ := filepath.Rel(projectRoot, absModulePath)
 			data, err := os.ReadFile(absModulePath)
 			if err == nil {
@@ -573,7 +571,7 @@ type fileSize struct {
 	size int64
 }
 
-func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []string, maxChars int) (map[string]string, []string, []string) {
+func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []string, maxChars int, engine *analyzer.Engine) (map[string]string, []string, []string) {
 	snapshot := make(map[string]string)
 	var order []string
 	var omitted []string
@@ -581,7 +579,6 @@ func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []str
 	var files []fileSize
 
 	if len(includePaths) > 0 {
-		// preserve priority order from caller — no sorting
 		for _, p := range includePaths {
 			absPath := p
 			if !filepath.IsAbs(p) {
@@ -591,7 +588,7 @@ func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []str
 			if err != nil || info.IsDir() {
 				continue
 			}
-			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+			if engine.IsSourceFile(absPath) {
 				files = append(files, fileSize{path: absPath, size: info.Size()})
 			}
 		}
@@ -606,7 +603,7 @@ func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []str
 				}
 				return nil
 			}
-			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+			if engine.IsSourceFile(path) {
 				files = append(files, fileSize{path: path, size: info.Size()})
 			}
 			return nil

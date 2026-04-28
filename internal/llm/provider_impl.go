@@ -330,7 +330,7 @@ func (e *notImplementedError) Error() string {
 	return e.msg
 }
 
-func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snapshotOrder []string, omitted []string, graph *ImportGraph, metrics []FileMetric, hotspots []GitHotspot, language string) string {
+func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snapshotOrder []string, omitted []string, graph *ImportGraph, metrics []FileMetric, hotspots []GitHotspot, snippetLang string, language string) string {
 	var sb strings.Builder
 
 	p := GetPrompts(language)
@@ -381,7 +381,9 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snaps
 		content := snapshot[path]
 		sb.WriteString("### ")
 		sb.WriteString(path)
-		sb.WriteString("\n```go\n")
+		sb.WriteString("\n```")
+		sb.WriteString(snippetLang)
+		sb.WriteString("\n")
 		sb.WriteString(content)
 		sb.WriteString("\n```\n\n")
 	}
@@ -555,7 +557,7 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, gra
 	return sb.String()
 }
 
-func BuildModuleAuditPrompt(modulePath string, files map[string]string, language string) string {
+func BuildModuleAuditPrompt(modulePath string, files map[string]string, snippetLang string, language string) string {
 	var sb strings.Builder
 
 	p := GetPrompts(language)
@@ -582,7 +584,9 @@ func BuildModuleAuditPrompt(modulePath string, files map[string]string, language
 	for path, content := range files {
 		sb.WriteString("### ")
 		sb.WriteString(path)
-		sb.WriteString("\n```go\n")
+		sb.WriteString("\n```")
+		sb.WriteString(snippetLang)
+		sb.WriteString("\n")
 		sb.WriteString(content)
 		sb.WriteString("\n```\n\n")
 	}

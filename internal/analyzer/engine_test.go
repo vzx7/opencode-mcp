@@ -122,8 +122,7 @@ func TestBuildImportGraph(t *testing.T) {
 	writeFile(t, tmpDir, "internal/api/api.go", "package api\nfunc Api() {}\n")
 
 	a := New(tmpDir)
-	pm, _ := a.BuildProjectMap()
-	graph, err := a.BuildImportGraph(pm)
+	graph, err := a.BuildImportGraph()
 	if err != nil {
 		t.Fatalf("BuildImportGraph() error = %v", err)
 	}
@@ -145,8 +144,7 @@ func TestBuildImportGraphCycles(t *testing.T) {
 	writeFile(t, tmpDir, "pkg/b/b.go", "package b\nimport \"github.com/test/project/pkg/a\"\nfunc B() {}\n")
 
 	a := New(tmpDir)
-	pm, _ := a.BuildProjectMap()
-	graph, err := a.BuildImportGraph(pm)
+	graph, err := a.BuildImportGraph()
 	if err != nil {
 		t.Fatalf("BuildImportGraph() error = %v", err)
 	}
@@ -164,8 +162,7 @@ func TestBuildImportGraphLayerViolations(t *testing.T) {
 	writeFile(t, tmpDir, "internal/tools/tool.go", "package tools\nimport \"github.com/test/project/internal/domain\"\nfunc Tool() {}\n")
 
 	a := New(tmpDir)
-	pm, _ := a.BuildProjectMap()
-	graph, err := a.BuildImportGraph(pm)
+	graph, err := a.BuildImportGraph()
 	if err != nil {
 		t.Fatalf("BuildImportGraph() error = %v", err)
 	}

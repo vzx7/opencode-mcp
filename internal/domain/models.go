@@ -50,11 +50,11 @@ type ProjectMap struct {
 }
 
 type Module struct {
-	Name     string   `json:"name"`
-	Path     string   `json:"path"`
-	Files    []string `json:"files"`
-	Type     string   `json:"type"`
-	GoFiles int      `json:"go_files"`
+	Name        string   `json:"name"`
+	Path        string   `json:"path"`
+	Files       []string `json:"files"`
+	Type        string   `json:"type"`
+	SourceFiles int      `json:"source_files"`
 }
 
 type ArchitectureLayer struct {

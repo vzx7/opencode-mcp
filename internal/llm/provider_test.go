@@ -252,7 +252,7 @@ func TestBuildPrompts(t *testing.T) {
 			Layers:  []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
 		graph := &ImportGraph{Edges: make(map[string][]string)}
-		prompt := BuildReviewPrompt(pm, nil, nil, nil, graph, nil, nil, "en")
+		prompt := BuildReviewPrompt(pm, nil, nil, nil, graph, nil, nil, "go", "en")
 		if !contains(prompt, ToolMarkerReview) {
 			t.Error("expected tool marker in review prompt")
 		}
@@ -265,7 +265,7 @@ func TestBuildPrompts(t *testing.T) {
 			Layers:  []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
 		graph := &ImportGraph{Edges: make(map[string][]string)}
-		prompt := BuildReviewPrompt(pm, nil, nil, nil, graph, nil, nil, "ru")
+		prompt := BuildReviewPrompt(pm, nil, nil, nil, graph, nil, nil, "go", "ru")
 		if !contains(prompt, "Модули:") {
 			t.Error("expected russian labels")
 		}
@@ -282,7 +282,7 @@ func TestBuildPrompts(t *testing.T) {
 
 	t.Run("BuildModuleAuditPrompt contains marker", func(t *testing.T) {
 		files := map[string]string{"test.go": "package main"}
-		prompt := BuildModuleAuditPrompt("test.go", files, "en")
+		prompt := BuildModuleAuditPrompt("test.go", files, "go", "en")
 		if !contains(prompt, ToolMarkerModuleAudit) {
 			t.Error("expected tool marker in audit prompt")
 		}

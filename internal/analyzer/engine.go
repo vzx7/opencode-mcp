@@ -4,9 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io/fs"
 	"log"
 	"os"
@@ -19,13 +16,13 @@ import (
 )
 
 const (
-	scorePenaltyLayerMissing = 10
+	scorePenaltyLayerMissing    = 10
 	scorePenaltyComponentMissing = 5
 )
 
 var defaultLayerPatterns = []struct {
-	name    string
-	prefix  string
+	name   string
+	prefix string
 }{
 	{"cmd", "cmd"},
 	{"internal", "internal"},
@@ -36,23 +33,54 @@ var defaultLayerPatterns = []struct {
 	{"repository", "internal/repository"},
 }
 
-type Analyzer struct {
+// Engine is the language-agnostic analysis orchestrator.
+// Language-specific operations are delegated to the embedded ProjectAnalyzer.
+type Engine struct {
 	rootPath string
+	lang     ProjectAnalyzer
 }
 
-func New(rootPath string) *Analyzer {
-	return &Analyzer{rootPath: rootPath}
+// New auto-detects the project language from rootPath.
+func New(rootPath string) *Engine {
+	return &Engine{rootPath: rootPath, lang: Detect(rootPath)}
 }
 
-func (a *Analyzer) BuildProjectMap() (*domain.ProjectMap, error) {
+// NewWithLang uses the named language analyzer. Falls back to auto-detection if unknown.
+func NewWithLang(rootPath, langName string) *Engine {
+	if langName != "" {
+		if lang, ok := ByName(langName); ok {
+			return &Engine{rootPath: rootPath, lang: lang}
+		}
+	}
+	return &Engine{rootPath: rootPath, lang: Detect(rootPath)}
+}
+
+// SnippetLang returns the markdown code block language tag for this project.
+func (e *Engine) SnippetLang() string { return e.lang.SnippetLang() }
+
+// LangName returns the detected/selected language name.
+func (e *Engine) LangName() string { return e.lang.Name() }
+
+// IsSourceFile returns true if path is a non-test source file for this language.
+func (e *Engine) IsSourceFile(path string) bool {
+	ext := filepath.Ext(filepath.Base(path))
+	for _, se := range e.lang.SourceExtensions() {
+		if ext == se && !e.lang.IsTestFile(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) BuildProjectMap() (*domain.ProjectMap, error) {
 	pm := &domain.ProjectMap{
-		Root:        a.rootPath,
-		Modules:     []domain.Module{},
-		Entrypoints: []string{},
+		Root:         e.rootPath,
+		Modules:      []domain.Module{},
+		Entrypoints:  []string{},
 		Dependencies: make(map[string][]string),
 	}
 
-	err := filepath.Walk(a.rootPath, func(path string, info fs.FileInfo, err error) error {
+	err := filepath.Walk(e.rootPath, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -68,13 +96,13 @@ func (a *Analyzer) BuildProjectMap() (*domain.ProjectMap, error) {
 					Type:  moduleType,
 					Files: []string{},
 				}
-				a.scanGoFiles(path, &mod)
-				if mod.GoFiles > 0 {
+				e.scanSourceFiles(path, &mod)
+				if mod.SourceFiles > 0 {
 					pm.Modules = append(pm.Modules, mod)
 				}
 			}
 			if info.Name() == "cmd" {
-				a.findEntrypoints(path, pm)
+				e.findEntrypoints(path, pm)
 			}
 		}
 		return nil
@@ -83,9 +111,8 @@ func (a *Analyzer) BuildProjectMap() (*domain.ProjectMap, error) {
 		return nil, fmt.Errorf("failed to walk directory: %w", err)
 	}
 
-	a.addRootModule(pm)
-	a.detectLayers(pm)
-	a.analyzeGoMod(pm)
+	e.addRootModule(pm)
+	e.detectLayers(pm)
 
 	sort.Slice(pm.Modules, func(i, j int) bool {
 		return pm.Modules[i].Name < pm.Modules[j].Name
@@ -97,7 +124,7 @@ func (a *Analyzer) BuildProjectMap() (*domain.ProjectMap, error) {
 	return pm, nil
 }
 
-func (a *Analyzer) scanGoFiles(dir string, mod *domain.Module) {
+func (e *Engine) scanSourceFiles(dir string, mod *domain.Module) {
 	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -108,59 +135,61 @@ func (a *Analyzer) scanGoFiles(dir string, mod *domain.Module) {
 			}
 			return nil
 		}
-		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-			relPath, err := filepath.Rel(a.rootPath, path)
+		if e.IsSourceFile(path) {
+			relPath, err := filepath.Rel(e.rootPath, path)
 			if err != nil {
 				log.Printf("Failed to get relative path for %s: %v", path, err)
 				return nil
 			}
 			mod.Files = append(mod.Files, relPath)
-			mod.GoFiles++
+			mod.SourceFiles++
 		}
 		return nil
-})
+	})
 	if err != nil {
 		log.Printf("Error walking directory %s: %v", dir, err)
 	}
 }
 
-func (a *Analyzer) findEntrypoints(dir string, pm *domain.ProjectMap) {
+func (e *Engine) findEntrypoints(dir string, pm *domain.ProjectMap) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	hasGoFiles := false
-	for _, e := range entries {
-		if e.IsDir() {
-			pm.Entrypoints = append(pm.Entrypoints, filepath.Join(dir, e.Name()))
-		} else if strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") {
-			hasGoFiles = true
+	hasSourceFiles := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			pm.Entrypoints = append(pm.Entrypoints, filepath.Join(dir, entry.Name()))
+		} else if e.IsSourceFile(filepath.Join(dir, entry.Name())) {
+			hasSourceFiles = true
 		}
 	}
-	// cmd/main.go directly inside cmd/ (no subdirectory per binary)
-	if hasGoFiles {
+	if hasSourceFiles {
 		pm.Entrypoints = append(pm.Entrypoints, dir)
 	}
 }
 
-func (a *Analyzer) addRootModule(pm *domain.ProjectMap) {
-	entries, err := os.ReadDir(a.rootPath)
+func (e *Engine) addRootModule(pm *domain.ProjectMap) {
+	entries, err := os.ReadDir(e.rootPath)
 	if err != nil {
 		return
 	}
-	mod := domain.Module{Name: "root", Path: a.rootPath, Type: "main", Files: []string{}}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") {
-			mod.Files = append(mod.Files, e.Name())
-			mod.GoFiles++
+	mod := domain.Module{Name: "root", Path: e.rootPath, Type: "main", Files: []string{}}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			path := filepath.Join(e.rootPath, entry.Name())
+			if e.IsSourceFile(path) {
+				mod.Files = append(mod.Files, entry.Name())
+				mod.SourceFiles++
+			}
 		}
 	}
-	if mod.GoFiles > 0 {
+	if mod.SourceFiles > 0 {
 		pm.Modules = append(pm.Modules, mod)
 	}
 }
 
-func (a *Analyzer) detectLayers(pm *domain.ProjectMap) {
+func (e *Engine) detectLayers(pm *domain.ProjectMap) {
 	existingPaths := make(map[string]bool)
 	for _, l := range pm.Layers {
 		for _, p := range l.Paths {
@@ -170,7 +199,7 @@ func (a *Analyzer) detectLayers(pm *domain.ProjectMap) {
 
 	for _, m := range pm.Modules {
 		for _, pattern := range defaultLayerPatterns {
-			fullPath := filepath.Join(a.rootPath, pattern.prefix)
+			fullPath := filepath.Join(e.rootPath, pattern.prefix)
 			if strings.HasPrefix(m.Path, fullPath) && !existingPaths[m.Path] {
 				found := false
 				for i := range pm.Layers {
@@ -192,122 +221,16 @@ func (a *Analyzer) detectLayers(pm *domain.ProjectMap) {
 	}
 }
 
-func (a *Analyzer) analyzeGoMod(pm *domain.ProjectMap) {
-	goModPath := filepath.Join(a.rootPath, "go.mod")
-	file, err := os.Open(goModPath)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	inRequireBlock := false
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		
-		if strings.HasPrefix(line, "require (") {
-			inRequireBlock = true
-			continue
-		}
-		if line == ")" {
-			inRequireBlock = false
-			continue
-		}
-		
-		var dep string
-		switch {
-		case inRequireBlock:
-			// "github.com/foo/bar v1.2.3 // indirect" → parts[0] is the package
-			parts := strings.Fields(line)
-			if len(parts) >= 1 && !strings.HasPrefix(parts[0], "//") {
-				dep = parts[0]
-			}
-		case strings.HasPrefix(line, "require "):
-			// "require github.com/foo/bar v1.2.3" → parts[1] is the package
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				dep = parts[1]
-			}
-		}
-		if dep != "" && !strings.HasPrefix(dep, "github.com/vzx7/") {
-			pm.Dependencies["github.com"] = append(pm.Dependencies["github.com"], dep)
-		}
-	}
-}
-
-func (a *Analyzer) BuildImportGraph(pm *domain.ProjectMap) (*domain.ImportGraph, error) {
-	graph := &domain.ImportGraph{
-		Edges:           make(map[string][]string),
-		Cycles:          [][]string{},
-		LayerViolations: []domain.LayerViolation{},
-	}
-
-	modulePrefix := a.getModulePrefix()
-
-	fset := token.NewFileSet()
-
-	err := filepath.Walk(a.rootPath, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			if strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(info.Name(), ".go") || strings.HasSuffix(info.Name(), "_test.go") {
-			return nil
-		}
-
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-
-		f, err := parser.ParseFile(fset, path, src, parser.ImportsOnly)
-		if err != nil {
-			return nil
-		}
-
-		pkgPath, _ := filepath.Rel(a.rootPath, filepath.Dir(path))
-		pkgPath = filepath.ToSlash(pkgPath)
-
-		for _, imp := range f.Imports {
-			importPath := strings.Trim(imp.Path.Value, `"`)
-			if strings.HasPrefix(importPath, modulePrefix) {
-				importPath = strings.TrimPrefix(importPath, modulePrefix)
-				importPath = strings.TrimPrefix(importPath, "/")
-				graph.Edges[pkgPath] = append(graph.Edges[pkgPath], importPath)
-			}
-		}
-
-		return nil
-	})
+// BuildImportGraph delegates edge construction to the language analyzer,
+// then computes cycles and layer violations (language-agnostic).
+func (e *Engine) BuildImportGraph() (*domain.ImportGraph, error) {
+	graph, err := e.lang.BuildImportGraph(e.rootPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build import graph: %w", err)
 	}
-
 	graph.Cycles = findCycles(graph.Edges)
 	graph.LayerViolations = findLayerViolations(graph.Edges)
-
 	return graph, nil
-}
-
-func (a *Analyzer) getModulePrefix() string {
-	goModPath := filepath.Join(a.rootPath, "go.mod")
-	data, err := os.ReadFile(goModPath)
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			return strings.Fields(line)[1]
-		}
-	}
-	return ""
 }
 
 func findCycles(edges map[string][]string) [][]string {
@@ -358,7 +281,6 @@ func indexOf(slice []string, s string) int {
 
 // computePackageLevels assigns a dependency level to each package.
 // Level 0 = packages that import no other internal packages (domain-like leaves).
-// Level N = packages whose longest path from a leaf is N hops.
 // Packages at a higher level should only import packages at a lower or equal level.
 func computePackageLevels(edges map[string][]string) map[string]int {
 	allNodes := make(map[string]bool)
@@ -376,7 +298,7 @@ func computePackageLevels(edges map[string][]string) map[string]int {
 	var computeLevel func(node string) int
 	computeLevel = func(node string) int {
 		if inStack[node] {
-			return 0 // cycle — break recursion
+			return 0
 		}
 		if visited[node] {
 			return level[node]
@@ -418,7 +340,6 @@ func findLayerViolations(edges map[string][]string) []domain.LayerViolation {
 			if !toKnown {
 				continue
 			}
-			// Violation: a lower-level package imports a higher-level one.
 			if fromLevel < toLevel {
 				violations = append(violations, domain.LayerViolation{
 					From:    from,
@@ -432,18 +353,18 @@ func findLayerViolations(edges map[string][]string) []domain.LayerViolation {
 	return violations
 }
 
-func (a *Analyzer) CollectGitHotspots(topN int) ([]domain.GitHotspot, error) {
-	cmd := exec.Command("git", "-C", a.rootPath, "log", "--name-only", "--pretty=format:")
+func (e *Engine) CollectGitHotspots(topN int) ([]domain.GitHotspot, error) {
+	cmd := exec.Command("git", "-C", e.rootPath, "log", "--name-only", "--pretty=format:")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, nil // not a git repo or git unavailable
+		return nil, nil
 	}
 
 	counts := make(map[string]int)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line != "" && strings.HasSuffix(line, ".go") && !strings.HasSuffix(line, "_test.go") {
+		if line != "" && e.IsSourceFile(line) {
 			counts[line]++
 		}
 	}
@@ -471,10 +392,10 @@ func (a *Analyzer) CollectGitHotspots(topN int) ([]domain.GitHotspot, error) {
 	return hotspots, nil
 }
 
-func (a *Analyzer) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetric, error) {
+func (e *Engine) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetric, error) {
 	metrics := []domain.FileMetric{}
 
-	err := filepath.Walk(a.rootPath, func(path string, info fs.FileInfo, err error) error {
+	err := filepath.Walk(e.rootPath, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -484,11 +405,11 @@ func (a *Analyzer) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetri
 			}
 			return nil
 		}
-		if !strings.HasSuffix(info.Name(), ".go") || strings.HasSuffix(info.Name(), "_test.go") {
+		if !e.IsSourceFile(path) {
 			return nil
 		}
 
-		relPath, _ := filepath.Rel(a.rootPath, path)
+		relPath, _ := filepath.Rel(e.rootPath, path)
 		relPath = filepath.ToSlash(relPath)
 
 		src, err := os.ReadFile(path)
@@ -497,16 +418,15 @@ func (a *Analyzer) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetri
 		}
 
 		lines := strings.Count(string(src), "\n") + 1
-		exportedFuncs, exportedTypes := countExportedSymbols(src)
-
-		hasTests := hasTestFile(path)
+		exportedFuncs, exportedTypes := e.lang.CountSymbols(src)
+		hasTests := e.lang.HasTestCounterpart(path)
 
 		metrics = append(metrics, domain.FileMetric{
-			Path:           relPath,
-			Lines:          lines,
-			ExportedFuncs:  exportedFuncs,
-			ExportedTypes:  exportedTypes,
-			HasTests:       hasTests,
+			Path:          relPath,
+			Lines:         lines,
+			ExportedFuncs: exportedFuncs,
+			ExportedTypes: exportedTypes,
+			HasTests:      hasTests,
 		})
 
 		return nil
@@ -518,51 +438,11 @@ func (a *Analyzer) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetri
 	return metrics, nil
 }
 
-func countExportedSymbols(src []byte) (funcs int, types int) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "", src, parser.ParseComments)
-	if err != nil {
-		return 0, 0
-	}
-
-	for _, decl := range f.Decls {
-		switch d := decl.(type) {
-		case *ast.FuncDecl:
-			if d.Name != nil && d.Name.IsExported() {
-				funcs++
-			}
-		case *ast.GenDecl:
-			for _, spec := range d.Specs {
-				switch s := spec.(type) {
-				case *ast.TypeSpec:
-					if s.Name != nil && s.Name.IsExported() {
-						types++
-					}
-				}
-			}
-		}
-	}
-
-	return
-}
-
-func hasTestFile(path string) bool {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	ext := filepath.Ext(base)
-	name := base[:len(base)-len(ext)]
-	testName := name + "_test.go"
-	testPath := filepath.Join(dir, testName)
-
-	_, err := os.Stat(testPath)
-	return err == nil
-}
-
-func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.ProjectMap) *domain.AuditReport {
+func (e *Engine) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.ProjectMap) *domain.AuditReport {
 	report := &domain.AuditReport{
-		Score:          100,
-		Summary:        "Architecture compliance check complete",
-		Issues:         []domain.Issue{},
+		Score:           100,
+		Summary:         "Architecture compliance check complete",
+		Issues:          []domain.Issue{},
 		Recommendations: []string{},
 	}
 
@@ -574,13 +454,12 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 	for _, rule := range rules.Layers {
 		currentPaths, ok := layerPaths[rule.Name]
 		if !ok {
-			issue := domain.Issue{
-				Severity:  domain.SeverityMedium,
-				Message:   fmt.Sprintf("Expected layer '%s' not found", rule.Name),
-				Location:  "project structure",
+			report.Issues = append(report.Issues, domain.Issue{
+				Severity:   domain.SeverityMedium,
+				Message:    fmt.Sprintf("Expected layer '%s' not found", rule.Name),
+				Location:   "project structure",
 				Suggestion: fmt.Sprintf("Add layer for %s components", rule.Name),
-			}
-			report.Issues = append(report.Issues, issue)
+			})
 			report.Score -= scorePenaltyLayerMissing
 			continue
 		}
@@ -594,13 +473,12 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 				}
 			}
 			if !found {
-				issue := domain.Issue{
-					Severity:  domain.SeverityLow,
-					Message:  fmt.Sprintf("Expected component '%s' in layer '%s'", allowed, rule.Name),
-					Location: rule.Name,
+				report.Issues = append(report.Issues, domain.Issue{
+					Severity:   domain.SeverityLow,
+					Message:    fmt.Sprintf("Expected component '%s' in layer '%s'", allowed, rule.Name),
+					Location:   rule.Name,
 					Suggestion: fmt.Sprintf("Consider adding %s", allowed),
-				}
-				report.Issues = append(report.Issues, issue)
+				})
 				report.Score -= scorePenaltyComponentMissing
 			}
 		}
@@ -619,11 +497,11 @@ func (a *Analyzer) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.P
 	return report
 }
 
-func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditReport, error) {
+func (e *Engine) AuditModule(modulePath, projectRoot string) (*domain.AuditReport, error) {
 	report := &domain.AuditReport{
-		Score:          100,
-		Summary:        "Module audit complete",
-		Issues:         []domain.Issue{},
+		Score:           100,
+		Summary:         "Module audit complete",
+		Issues:          []domain.Issue{},
 		Recommendations: []string{},
 	}
 
@@ -638,7 +516,7 @@ func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditRep
 		return nil, fmt.Errorf("failed to read module path: %w", err)
 	}
 
-	var goFiles []string
+	var sourceFiles []string
 
 	if info.IsDir() {
 		err := filepath.Walk(absModulePath, func(p string, fi fs.FileInfo, err error) error {
@@ -651,9 +529,9 @@ func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditRep
 				}
 				return nil
 			}
-			if strings.HasSuffix(fi.Name(), ".go") && !strings.HasSuffix(fi.Name(), "_test.go") {
+			if e.IsSourceFile(p) {
 				rel, _ := filepath.Rel(absModulePath, p)
-				goFiles = append(goFiles, rel)
+				sourceFiles = append(sourceFiles, rel)
 			}
 			return nil
 		})
@@ -661,17 +539,17 @@ func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditRep
 			return nil, fmt.Errorf("failed to walk module: %w", err)
 		}
 	} else {
-		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-			goFiles = append(goFiles, info.Name())
+		if e.IsSourceFile(absModulePath) {
+			sourceFiles = append(sourceFiles, info.Name())
 		}
 	}
 
-	if len(goFiles) == 0 {
+	if len(sourceFiles) == 0 {
 		report.Issues = append(report.Issues, domain.Issue{
 			Severity:   domain.SeverityHigh,
-			Message:    "Module has no Go files",
-			Location:  modulePath,
-			Suggestion: "Add Go source files to the module",
+			Message:    "Module has no source files",
+			Location:   modulePath,
+			Suggestion: "Add source files to the module",
 		})
 		report.Score = 0
 		report.Summary = "Module empty or missing source files"
@@ -680,7 +558,7 @@ func (a *Analyzer) AuditModule(modulePath, projectRoot string) (*domain.AuditRep
 
 	relPath, _ := filepath.Rel(projectRoot, absModulePath)
 	report.Recommendations = append(report.Recommendations, fmt.Sprintf("Review: %s", relPath))
-	report.Recommendations = append(report.Recommendations, fmt.Sprintf("Found %d Go files", len(goFiles)))
+	report.Recommendations = append(report.Recommendations, fmt.Sprintf("Found %d source files", len(sourceFiles)))
 
 	return report, nil
 }

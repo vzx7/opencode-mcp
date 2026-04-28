@@ -216,6 +216,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 							Type:        "array",
 							Description: "Список путей к файлам для анализа (относительно project_path). Если не указан — анализируются все файлы проекта автоматически",
 						},
+						"programming_language": {
+							Type:        "string",
+							Description: "Язык программирования проекта (go, python, typescript). Определяется автоматически если не указан",
+						},
 					},
 				},
 			},
@@ -245,6 +249,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 							Type:        "string",
 							Description: "Язык ответа (ru, en)",
 						},
+						"programming_language": {
+							Type:        "string",
+							Description: "Язык программирования проекта (go, python, typescript). Определяется автоматически если не указан",
+						},
 					},
 				},
 			},
@@ -273,6 +281,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 						"language": {
 							Type:        "string",
 							Description: "Язык ответа (ru, en)",
+						},
+						"programming_language": {
+							Type:        "string",
+							Description: "Язык программирования проекта (go, python, typescript). Определяется автоматически если не указан",
 						},
 					},
 				},
@@ -328,6 +340,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 					}
 				}
 			}
+			if pl, ok := arguments["programming_language"].(string); ok {
+				input.ProgrammingLanguage = pl
+			}
 		}
 
 		report, err := s.executor.ArchitectureReview(ctx, input)
@@ -357,6 +372,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 			if l, ok := arguments["language"].(string); ok {
 				input.Language = l
 			}
+			if pl, ok := arguments["programming_language"].(string); ok {
+				input.ProgrammingLanguage = pl
+			}
 		}
 
 		report, err := s.executor.ArchitectureComplianceCheck(ctx, input)
@@ -384,6 +402,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 			}
 			if l, ok := arguments["language"].(string); ok {
 				input.Language = l
+			}
+			if pl, ok := arguments["programming_language"].(string); ok {
+				input.ProgrammingLanguage = pl
 			}
 		}
 

@@ -86,7 +86,7 @@ func TestProjectMap(t *testing.T) {
 	pm := ProjectMap{
 		Root: "/test",
 		Modules: []Module{
-			{Name: "main", Path: "./cmd/main.go", Type: "cmd", GoFiles: 1},
+			{Name: "main", Path: "./cmd/main.go", Type: "cmd", SourceFiles: 1},
 		},
 		Entrypoints: []string{"cmd/main.go"},
 		Dependencies: map[string][]string{

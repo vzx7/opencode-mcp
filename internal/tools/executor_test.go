@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vzx7/opencode-mcp/internal/analyzer"
 	"github.com/vzx7/opencode-mcp/internal/domain"
 )
 
@@ -208,7 +209,7 @@ func TestEnrichWithLocalAnalysis(t *testing.T) {
 		report := &domain.AuditReport{Score: 100}
 		pm := &domain.ProjectMap{
 			Root: "/test",
-			Modules: []domain.Module{{Name: "main", Path: "cmd/main", GoFiles: 1}},
+			Modules: []domain.Module{{Name: "main", Path: "cmd/main", SourceFiles: 1}},
 			Layers: []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
 
@@ -223,7 +224,7 @@ func TestEnrichWithLocalAnalysis(t *testing.T) {
 		report := &domain.AuditReport{Score: 100}
 		pm := &domain.ProjectMap{
 			Root: "/test",
-			Modules: []domain.Module{{Name: "main", Path: "cmd/main", GoFiles: 1}},
+			Modules: []domain.Module{{Name: "main", Path: "cmd/main", SourceFiles: 1}},
 			Layers: []domain.ArchitectureLayer{
 				{Name: "cmd", Paths: []string{"cmd"}},
 				{Name: "internal", Paths: []string{"internal"}},
@@ -261,7 +262,8 @@ func TestReadModuleContent(t *testing.T) {
 		tmpDir := t.TempDir()
 		os.WriteFile(filepath.Join(tmpDir, "test.go"), []byte("package main"), 0644)
 
-		content, err := te.readModuleContent(tmpDir, tmpDir)
+		eng := analyzer.New(tmpDir)
+		content, err := te.readModuleContent(tmpDir, tmpDir, eng)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -275,7 +277,8 @@ func TestReadModuleContent(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "test.go"), []byte("package main"), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "test_test.go"), []byte("package main"), 0644)
 
-		content, err := te.readModuleContent(tmpDir, tmpDir)
+		eng := analyzer.New(tmpDir)
+		content, err := te.readModuleContent(tmpDir, tmpDir, eng)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -285,7 +288,8 @@ func TestReadModuleContent(t *testing.T) {
 	})
 
 	t.Run("returns empty for non-existent path", func(t *testing.T) {
-		_, err := te.readModuleContent("/non/existent", "/non")
+		eng := analyzer.New("/non")
+		_, err := te.readModuleContent("/non/existent", "/non", eng)
 		if err == nil {
 			t.Error("expected error for non-existent path")
 		}
@@ -318,7 +322,8 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "big.go"), []byte("package main\n"+string(make([]byte, 1000))), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "small.go"), []byte("package main"), 0644)
 
-		snapshot, order, omitted := te.buildCodeSnapshot(tmpDir, nil, 5000)
+		eng := analyzer.New(tmpDir)
+		snapshot, order, omitted := te.buildCodeSnapshot(tmpDir, nil, 5000, eng)
 		if len(snapshot) != 2 {
 			t.Errorf("expected 2 files, got %d", len(snapshot))
 		}
@@ -335,7 +340,8 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package main\n"+string(make([]byte, 2000))), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package main\n"+string(make([]byte, 2000))), 0644)
 
-		snapshot, _, omitted := te.buildCodeSnapshot(tmpDir, nil, 2500)
+		eng := analyzer.New(tmpDir)
+		snapshot, _, omitted := te.buildCodeSnapshot(tmpDir, nil, 2500, eng)
 		if len(snapshot) == 0 {
 			t.Error("expected at least one file")
 		}
@@ -350,7 +356,8 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "vendor", "dep.go"), []byte("package dep"), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
 
-		snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 5000)
+		eng := analyzer.New(tmpDir)
+		snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 5000, eng)
 		if len(snapshot) != 1 {
 			t.Errorf("expected 1 file (skip vendor), got %d", len(snapshot))
 		}
@@ -361,7 +368,8 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "app_test.go"), []byte("package main"), 0644)
 
-		snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 5000)
+		eng := analyzer.New(tmpDir)
+		snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 5000, eng)
 		if len(snapshot) != 1 {
 			t.Errorf("expected 1 file (skip test), got %d", len(snapshot))
 		}
@@ -373,7 +381,8 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package main"), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "c.go"), []byte("package main"), 0644)
 
-		snapshot, order, omitted := te.buildCodeSnapshot(tmpDir, []string{filepath.Join(tmpDir, "a.go")}, 5000)
+		eng := analyzer.New(tmpDir)
+		snapshot, order, omitted := te.buildCodeSnapshot(tmpDir, []string{filepath.Join(tmpDir, "a.go")}, 5000, eng)
 		if len(snapshot) != 1 {
 			t.Errorf("expected 1 file from include_paths, got %d", len(snapshot))
 		}
@@ -399,7 +408,8 @@ func TestBuildCodeSnapshot(t *testing.T) {
 			filepath.Join(tmpDir, "second.go"),
 			filepath.Join(tmpDir, "third.go"),
 		}
-		_, order, _ := te.buildCodeSnapshot(tmpDir, paths, 5000)
+		eng := analyzer.New(tmpDir)
+		_, order, _ := te.buildCodeSnapshot(tmpDir, paths, 5000, eng)
 		if len(order) != 3 {
 			t.Fatalf("expected 3 in order, got %d", len(order))
 		}
