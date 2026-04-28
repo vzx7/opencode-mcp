@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -9,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -354,28 +356,74 @@ func indexOf(slice []string, s string) int {
 	return -1
 }
 
-var layerOrder = []string{"domain", "analyzer", "llm", "tools", "mcp"}
+// computePackageLevels assigns a dependency level to each package.
+// Level 0 = packages that import no other internal packages (domain-like leaves).
+// Level N = packages whose longest path from a leaf is N hops.
+// Packages at a higher level should only import packages at a lower or equal level.
+func computePackageLevels(edges map[string][]string) map[string]int {
+	allNodes := make(map[string]bool)
+	for from, deps := range edges {
+		allNodes[from] = true
+		for _, to := range deps {
+			allNodes[to] = true
+		}
+	}
+
+	level := make(map[string]int)
+	visited := make(map[string]bool)
+	inStack := make(map[string]bool)
+
+	var computeLevel func(node string) int
+	computeLevel = func(node string) int {
+		if inStack[node] {
+			return 0 // cycle — break recursion
+		}
+		if visited[node] {
+			return level[node]
+		}
+		visited[node] = true
+		inStack[node] = true
+
+		maxDepLevel := -1
+		for _, dep := range edges[node] {
+			if dl := computeLevel(dep); dl > maxDepLevel {
+				maxDepLevel = dl
+			}
+		}
+		level[node] = maxDepLevel + 1
+		inStack[node] = false
+		return level[node]
+	}
+
+	for node := range allNodes {
+		if !visited[node] {
+			computeLevel(node)
+		}
+	}
+
+	return level
+}
 
 func findLayerViolations(edges map[string][]string) []domain.LayerViolation {
+	levels := computePackageLevels(edges)
 	violations := []domain.LayerViolation{}
 
 	for from, deps := range edges {
-		fromLayer := getLayerName(from)
-		if fromLayer == "" {
+		fromLevel, fromKnown := levels[from]
+		if !fromKnown {
 			continue
 		}
-
 		for _, to := range deps {
-			toLayer := getLayerName(to)
-			if toLayer == "" {
+			toLevel, toKnown := levels[to]
+			if !toKnown {
 				continue
 			}
-
-			if isLayerViolation(fromLayer, toLayer) {
+			// Violation: a lower-level package imports a higher-level one.
+			if fromLevel < toLevel {
 				violations = append(violations, domain.LayerViolation{
 					From:    from,
 					To:      to,
-					Message: fmt.Sprintf("Layer violation: %s (%s) imports %s (%s)", from, fromLayer, to, toLayer),
+					Message: fmt.Sprintf("Layer violation: %s (level %d) imports %s (level %d)", from, fromLevel, to, toLevel),
 				})
 			}
 		}
@@ -384,33 +432,43 @@ func findLayerViolations(edges map[string][]string) []domain.LayerViolation {
 	return violations
 }
 
-func getLayerName(pkgPath string) string {
-	for _, layer := range layerOrder {
-		if strings.Contains(pkgPath, layer) {
-			return layer
-		}
+func (a *Analyzer) CollectGitHotspots(topN int) ([]domain.GitHotspot, error) {
+	cmd := exec.Command("git", "-C", a.rootPath, "log", "--name-only", "--pretty=format:")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil // not a git repo or git unavailable
 	}
-	return ""
-}
 
-func isLayerViolation(fromLayer, toLayer string) bool {
-	fromIdx := -1
-	toIdx := -1
-
-	for i, l := range layerOrder {
-		if l == fromLayer {
-			fromIdx = i
-		}
-		if l == toLayer {
-			toIdx = i
+	counts := make(map[string]int)
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && strings.HasSuffix(line, ".go") && !strings.HasSuffix(line, "_test.go") {
+			counts[line]++
 		}
 	}
 
-	if fromIdx == -1 || toIdx == -1 {
-		return false
+	type pair struct {
+		path    string
+		commits int
 	}
+	pairs := make([]pair, 0, len(counts))
+	for path, cnt := range counts {
+		pairs = append(pairs, pair{path, cnt})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].commits > pairs[j].commits
+	})
 
-	return fromIdx < toIdx
+	n := topN
+	if n > len(pairs) {
+		n = len(pairs)
+	}
+	hotspots := make([]domain.GitHotspot, n)
+	for i := 0; i < n; i++ {
+		hotspots[i] = domain.GitHotspot{Path: pairs[i].path, Commits: pairs[i].commits}
+	}
+	return hotspots, nil
 }
 
 func (a *Analyzer) CollectFileMetrics(pm *domain.ProjectMap) ([]domain.FileMetric, error) {

@@ -330,10 +330,26 @@ func (e *notImplementedError) Error() string {
 	return e.msg
 }
 
-func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitted []string, graph *ImportGraph, metrics []FileMetric, language string) string {
+func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snapshotOrder []string, omitted []string, graph *ImportGraph, metrics []FileMetric, hotspots []GitHotspot, language string) string {
 	var sb strings.Builder
 
 	p := GetPrompts(language)
+	if p == nil {
+		p = &Prompts{
+			SystemRole: "You are a software architect reviewing code.",
+			Labels: map[string]string{
+				"root":              "Root",
+				"modules":           "Modules",
+				"layers":            "Layers",
+				"snapshot_section":   "Snapshot",
+				"snapshot_order_note": "Files are ordered by size (largest first).",
+				"omitted_note":       "%d files omitted (over %d chars): %s",
+				"import_graph_section": "Import Graph",
+				"metrics_section":      "File Metrics",
+				"hotspots_section":     "Git Hotspots",
+			},
+		}
+	}
 
 	sb.WriteString(ToolMarkerReview)
 	sb.WriteString("\n")
@@ -359,8 +375,10 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitt
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\n## Source Code Snapshot\n")
-	for path, content := range snapshot {
+	sb.WriteString("\n" + p.Labels["snapshot_section"] + "\n")
+	sb.WriteString(p.Labels["snapshot_order_note"] + "\n\n")
+	for _, path := range snapshotOrder {
+		content := snapshot[path]
 		sb.WriteString("### ")
 		sb.WriteString(path)
 		sb.WriteString("\n```go\n")
@@ -368,11 +386,11 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitt
 		sb.WriteString("\n```\n\n")
 	}
 	if len(omitted) > 0 {
-		sb.WriteString(fmt.Sprintf("> **Note:** %d file(s) omitted from snapshot due to 100 000 char limit — their structure is still reflected in the import graph and metrics below: %s\n\n",
+		sb.WriteString(fmt.Sprintf("> "+p.Labels["omitted_note"]+"\n\n",
 			len(omitted), strings.Join(omitted, ", ")))
 	}
 
-	sb.WriteString("\n## Import Graph\n")
+	sb.WriteString("\n" + p.Labels["import_graph_section"] + "\n")
 	for pkg, imports := range graph.Edges {
 		sb.WriteString("- ")
 		sb.WriteString(pkg)
@@ -382,7 +400,7 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitt
 	}
 
 	if len(graph.Cycles) > 0 {
-		sb.WriteString("\n### Cycles Detected [CYCLE]\n")
+		sb.WriteString("\n" + p.Labels["cycles_detected"] + "\n")
 		for _, cycle := range graph.Cycles {
 			sb.WriteString("- ")
 			sb.WriteString(strings.Join(cycle, " → "))
@@ -391,7 +409,7 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitt
 	}
 
 	if len(graph.LayerViolations) > 0 {
-		sb.WriteString("\n### Layer Violations [LAYER VIOLATION]\n")
+		sb.WriteString("\n" + p.Labels["layer_violations"] + "\n")
 		for _, v := range graph.LayerViolations {
 			sb.WriteString("- ")
 			sb.WriteString(v.From)
@@ -403,14 +421,14 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitt
 		}
 	}
 
-	sb.WriteString("\n## File Metrics\n")
-	sb.WriteString("| File | Lines | Exported Funcs | Exported Types | Has Tests |\n")
+	sb.WriteString("\n" + p.Labels["file_metrics_section"] + "\n")
+	sb.WriteString(p.Labels["metrics_table_header"] + "\n")
 	sb.WriteString("|------|-------|----------------|----------------|----------|\n")
 	for _, m := range metrics {
 		if m.Lines > 500 {
 			sb.WriteString("| **")
 			sb.WriteString(m.Path)
-			sb.WriteString("** (large) | ")
+			sb.WriteString("** " + p.Labels["large_file_marker"] + " | ")
 		} else {
 			sb.WriteString("| ")
 			sb.WriteString(m.Path)
@@ -419,14 +437,23 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, omitt
 		sb.WriteString(fmt.Sprintf("%d | %d | %d | %v |\n", m.Lines, m.ExportedFuncs, m.ExportedTypes, m.HasTests))
 	}
 
-	sb.WriteString("\nProvide a structured architecture review focusing on:\n")
-	sb.WriteString("1. Identify coupling hotspots based on the import graph\n")
-	sb.WriteString("2. Comment on the size and responsibility of large files\n")
-	sb.WriteString("3. Assess whether the public API surface (exported symbols) is appropriate per layer\n")
+	if len(hotspots) > 0 {
+		sb.WriteString("\n" + p.Labels["hotspots_section"] + "\n")
+		sb.WriteString(p.Labels["hotspots_note"] + "\n\n")
+		for _, h := range hotspots {
+			sb.WriteString(fmt.Sprintf("- %s (%d commits)\n", h.Path, h.Commits))
+		}
+	}
+
+	sb.WriteString("\n" + p.Labels["review_intro"] + "\n")
 	for i, focus := range p.ReviewFocus {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+4, focus))
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, focus))
 	}
 	sb.WriteString("\n")
+	if rubric := p.Labels["scoring_rubric"]; rubric != "" {
+		sb.WriteString(rubric)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(p.JSONSchemaInstruction)
 	sb.WriteString("\n")
 	sb.WriteString(GetJSONSchema(language))
@@ -440,18 +467,36 @@ func appendJSONSchema(sb *strings.Builder, language string) {
 	sb.WriteString(GetJSONSchema(language))
 }
 
-func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, language string) string {
+func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, graph *ImportGraph, language string) string {
 	var sb strings.Builder
 
 	p := GetPrompts(language)
+	if p == nil {
+		p = &Prompts{
+			SystemRole: "You are a software architect reviewing architecture compliance.",
+			Labels: map[string]string{
+				"compliance_rules_section":    "Compliance Rules",
+				"compliance_layer_label":       "Layer",
+				"paths":                      "Paths",
+				"allowed":                    "Allowed",
+				"compliance_structure_section": "Project Structure",
+				"root":                       "Root",
+				"layers":                     "Layers",
+				"import_graph_section":         "Import Graph",
+			},
+		}
+	}
 	c := p.Compliance
+	if c.SystemRole == "" {
+		c.SystemRole = "You are a software architect reviewing architecture compliance."
+	}
 
 	sb.WriteString(ToolMarkerCompliance)
 	sb.WriteString("\n")
 	sb.WriteString(c.SystemRole)
-	sb.WriteString("\n\n## Target Architecture Rules\n")
+	sb.WriteString("\n\n" + p.Labels["compliance_rules_section"] + "\n")
 	for _, layer := range rules.Layers {
-		sb.WriteString("Layer: ")
+		sb.WriteString(p.Labels["compliance_layer_label"] + " ")
 		sb.WriteString(layer.Name)
 		sb.WriteString("\n  " + p.Labels["paths"] + " ")
 		sb.WriteString(strings.Join(layer.Paths, ", "))
@@ -459,7 +504,7 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, lan
 		sb.WriteString(strings.Join(layer.Allow, ", "))
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\n## Current Project Structure\n")
+	sb.WriteString("\n" + p.Labels["compliance_structure_section"] + "\n")
 	sb.WriteString(p.Labels["root"] + " ")
 	sb.WriteString(projectMap.Root)
 	sb.WriteString("\n\n" + p.Labels["layers"] + "\n")
@@ -470,7 +515,38 @@ func BuildCompliancePrompt(rules *ArchitectureRules, projectMap *ProjectMap, lan
 		sb.WriteString(strings.Join(l.Paths, ", "))
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\n" + c.IdentifyViolations)
+	if graph != nil {
+		sb.WriteString("\n" + p.Labels["import_graph_section"] + "\n")
+		for pkg, imports := range graph.Edges {
+			sb.WriteString("- ")
+			sb.WriteString(pkg)
+			sb.WriteString(" → ")
+			sb.WriteString(strings.Join(imports, ", "))
+			sb.WriteString("\n")
+		}
+		if len(graph.Cycles) > 0 {
+			sb.WriteString("\n" + p.Labels["cycles_detected"] + "\n")
+			for _, cycle := range graph.Cycles {
+				sb.WriteString("- ")
+				sb.WriteString(strings.Join(cycle, " → "))
+				sb.WriteString("\n")
+			}
+		}
+		if len(graph.LayerViolations) > 0 {
+			sb.WriteString("\n" + p.Labels["layer_violations"] + "\n")
+			for _, v := range graph.LayerViolations {
+				sb.WriteString("- ")
+				sb.WriteString(v.From)
+				sb.WriteString(" → ")
+				sb.WriteString(v.To)
+				sb.WriteString(": ")
+				sb.WriteString(v.Message)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	sb.WriteString("\n" + c.SeverityGuide)
+	sb.WriteString("\n\n" + c.IdentifyViolations)
 	sb.WriteString("\n" + c.ReturnFormat)
 	sb.WriteString("\n")
 	sb.WriteString(p.JSONSchemaInstruction)
@@ -483,14 +559,26 @@ func BuildModuleAuditPrompt(modulePath string, files map[string]string, language
 	var sb strings.Builder
 
 	p := GetPrompts(language)
-	m := p.ModuleAudit
+	if p == nil {
+		p = &Prompts{
+			SystemRole: "You are a software architect auditing a module.",
+			Labels: map[string]string{
+				"module_path_label":   "Module Path",
+				"module_source_label": "Module Source",
+			},
+		}
+	}
+	ma := p.ModuleAudit
+	if ma.SystemRole == "" {
+		ma.SystemRole = "You are a software architect auditing a module."
+	}
 
 	sb.WriteString(ToolMarkerModuleAudit)
 	sb.WriteString("\n")
-	sb.WriteString(m.SystemRole)
-	sb.WriteString("\n\n## Module Path: ")
+	sb.WriteString(ma.SystemRole)
+	sb.WriteString("\n\n" + p.Labels["module_path_label"] + " ")
 	sb.WriteString(modulePath)
-	sb.WriteString("\n\n## Source Code:\n")
+	sb.WriteString("\n\n" + p.Labels["module_source_label"] + "\n")
 	for path, content := range files {
 		sb.WriteString("### ")
 		sb.WriteString(path)
@@ -498,7 +586,18 @@ func BuildModuleAuditPrompt(modulePath string, files map[string]string, language
 		sb.WriteString(content)
 		sb.WriteString("\n```\n\n")
 	}
-	sb.WriteString(m.ReturnFormat)
+	if len(ma.Focus) > 0 {
+		sb.WriteString(p.Labels["review_intro"] + "\n")
+		for i, focus := range ma.Focus {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, focus))
+		}
+		sb.WriteString("\n")
+	}
+	if ma.ScoringRubric != "" {
+		sb.WriteString(ma.ScoringRubric)
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString(ma.ReturnFormat)
 	sb.WriteString("\n")
 	sb.WriteString(p.JSONSchemaInstruction)
 	sb.WriteString("\n")

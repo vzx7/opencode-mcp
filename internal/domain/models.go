@@ -81,3 +81,8 @@ type FileMetric struct {
 	ExportedTypes  int    `json:"exported_types"`
 	HasTests       bool   `json:"has_tests"`
 }
+
+type GitHotspot struct {
+	Path    string `json:"path"`
+	Commits int    `json:"commits"`
+}

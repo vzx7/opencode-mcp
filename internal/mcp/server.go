@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -146,7 +145,7 @@ func (s *Server) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	var resp interface{}
 
 	switch req.Method {
@@ -212,6 +211,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 						"language": {
 							Type:        "string",
 							Description: "Язык ответа (ru, en)",
+						},
+						"include_paths": {
+							Type:        "array",
+							Description: "Список путей к файлам для анализа (относительно project_path). Если не указан — анализируются все файлы проекта автоматически",
 						},
 					},
 				},
@@ -317,6 +320,13 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 			}
 			if l, ok := arguments["language"].(string); ok {
 				input.Language = l
+			}
+			if raw, ok := arguments["include_paths"].([]interface{}); ok {
+				for _, v := range raw {
+					if s, ok := v.(string); ok {
+						input.IncludePaths = append(input.IncludePaths, s)
+					}
+				}
 			}
 		}
 
@@ -531,48 +541,6 @@ func (s *Server) formatReport(report *domain.AuditReport) string {
 	return b.String()
 }
 
-func (s *Server) saveDebugResponse(toolName string, content string) {
-	if s.debug {
-		s.logger.Printf("saveDebugResponse: debugDir=%q, content_len=%d", s.debugDir, len(content))
-	}
-
-	if s.debugDir == "" {
-		if s.debug {
-			s.logger.Printf("saveDebugResponse: skipped - no debugDir")
-		}
-		return
-	}
-
-	if content == "" {
-		if s.debug {
-			s.logger.Printf("saveDebugResponse: skipped - empty content")
-		}
-		return
-	}
-
-	filename := fmt.Sprintf("%s_%s_%04d.md", toolName, time.Now().Format("20060102_150405"), rand.Intn(9999))
-	path := filepath.Join(s.debugDir, filename)
-
-	header := fmt.Sprintf("# %s\n\n", strings.ToUpper(toolName))
-	header += fmt.Sprintf("**Time:** %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
-	header += fmt.Sprintf("**Project:** %s\n\n", s.defaultPath)
-	header += "---\n\n"
-
-	output := header + content
-
-	if s.debug {
-		s.logger.Printf("saveDebugResponse: writing %d bytes to %s", len(output), path)
-	}
-
-	if err := os.WriteFile(path, []byte(output), 0644); err != nil {
-		s.logger.Printf("Failed to write debug file: %v", err)
-	} else {
-		if s.debug {
-			s.logger.Printf("Saved response to: %s", path)
-		}
-	}
-}
-
 func (s *Server) sendError(w http.ResponseWriter, req *JSONRPCRequest, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
@@ -641,58 +609,68 @@ func (s *Server) StartStdio() {
 
 	decoder := json.NewDecoder(os.Stdin)
 
+	type decodeResult struct {
+		req JSONRPCRequest
+		err error
+	}
+
+	msgCh := make(chan decodeResult, 1)
+	go func() {
+		for {
+			var req JSONRPCRequest
+			err := decoder.Decode(&req)
+			msgCh <- decodeResult{req, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
-		var req JSONRPCRequest
-		reqCh := make(chan error, 1)
-
-		go func() {
-			reqCh <- decoder.Decode(&req)
-		}()
-
 		select {
 		case <-shutdownCh:
 			s.logger.Println("Shutting down...")
 			return
-		case err := <-reqCh:
-			if err != nil {
-				if err == io.EOF {
+		case res := <-msgCh:
+			if res.err != nil {
+				if res.err == io.EOF {
 					return
 				}
-				s.logger.Printf("Read error: %v", err)
+				s.logger.Printf("Read error: %v", res.err)
 				return
 			}
-		}
 
-		if s.debug {
-			s.logger.Printf(">>> Request: method=%s, id=%v", req.Method, req.ID)
-			if req.Method == "tools/call" {
-				if name, ok := req.Params["name"].(string); ok {
-					s.logger.Printf("    Tool: %s", name)
+			if s.debug {
+				s.logger.Printf(">>> Request: method=%s, id=%v", res.req.Method, res.req.ID)
+				if res.req.Method == "tools/call" {
+					if name, ok := res.req.Params["name"].(string); ok {
+						s.logger.Printf("    Tool: %s", name)
+					}
 				}
 			}
-		}
 
-		ctx := context.Background()
-		var resp interface{}
+			ctx := context.Background()
+			var resp interface{}
 
-		switch req.Method {
-		case "initialize":
-			resp = s.handleInitialize(req)
-		case "tools/list":
-			resp = s.handleToolsList(req)
-		case "tools/call":
-			resp = s.handleToolsCall(ctx, req)
-		default:
-			s.sendErrorStdio(encoder, &req, fmt.Sprintf("method not found: %s", req.Method))
-			continue
-		}
+			switch res.req.Method {
+			case "initialize":
+				resp = s.handleInitialize(res.req)
+			case "tools/list":
+				resp = s.handleToolsList(res.req)
+			case "tools/call":
+				resp = s.handleToolsCall(ctx, res.req)
+			default:
+				s.sendErrorStdio(encoder, &res.req, fmt.Sprintf("method not found: %s", res.req.Method))
+				continue
+			}
 
-		jsonResp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  resp,
+			jsonResp := JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      res.req.ID,
+				Result:  resp,
+			}
+			encoder.Encode(jsonResp)
 		}
-		encoder.Encode(jsonResp)
 	}
 }
 

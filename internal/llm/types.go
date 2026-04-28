@@ -6,3 +6,4 @@ type ProjectMap = domain.ProjectMap
 type ArchitectureRules = domain.ArchitectureRules
 type ImportGraph = domain.ImportGraph
 type FileMetric = domain.FileMetric
+type GitHotspot = domain.GitHotspot

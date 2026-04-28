@@ -32,9 +32,10 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PROVIDER` | LLM provider (`mock`, `openai`, or OpenAI-compatible) | `mock` |
+| `PROVIDER` | LLM provider (`mock`, `openai`, `anthropic`) | `mock` |
 | `LLM` | Model | `gpt-4o` |
-| `API_KEY` | API key | - |
+| `OPENAI_API_KEY` | OpenAI API key | - |
+| `ANTHROPIC_API_KEY` | Anthropic API key | - |
 | `ENDPOINT` | Custom endpoint (for OpenAI-compatible APIs) | - |
 | `PROJECT` | Project path | current directory |
 | `PORT` | Port | `8080` |
@@ -55,7 +56,7 @@ PORT=8080
 ```env
 PROVIDER=openai
 LLM=gpt-4o
-API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 ```
 
 **Anthropic:**
@@ -82,7 +83,7 @@ All flags override the corresponding `.env` values:
 -debug         Enable verbose logging
 ```
 
-> **Security Note:** `-api-key` flag is available for convenience, but API keys may be visible in process list. For production, use `.env` file instead (it's in `.gitignore`).
+> **Security Note:** For production, use `.env` file for API keys (it's in `.gitignore`).
 
 **Examples:**
 ```bash

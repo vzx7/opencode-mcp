@@ -46,7 +46,7 @@ debug/ directory             — .md + .json report pairs per invocation
 - `cmd/main.go` — CLI flags, config loading, server startup
 - `internal/config/config.go` — `.env` loading and validation
 - `internal/domain/models.go` — shared data structs (`Issue`, `AuditReport`, `ProjectMap`)
-- `internal/llm/` — `Provider` interface + implementations; `types.go` has request/response structs
+- `internal/llm/` — `Provider` interface + implementations; `types.go` has type aliases for domain types
 - `internal/analyzer/engine.go` — walks project files, detects languages, maps dependencies
 - `internal/tools/executor.go` — thread-safe (RWMutex) executor; builds LLM prompts, parses responses, saves reports
 
@@ -67,4 +67,4 @@ Copy `.env.example` to `.env` and set `API_KEY` for non-mock providers. Each too
 
 ## Debug Output
 
-When `-debug` flag is set, reports are written to `<project>/debug/` (or `-debug-dir`) as both `<tool>_<timestamp>_<rand>.md` and `.json`. The `debug/` directory is git-ignored.
+When `-debug` flag is set, reports are written to `<project>/debug/` (or `-debug-dir`) as both `<tool>_<timestamp>_<timestamp_nanos>.md` and `.json`. The `debug/` directory is git-ignored.

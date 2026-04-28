@@ -54,13 +54,16 @@ type Prompts struct {
 
 type CompliancePrompts struct {
 	SystemRole          string `json:"system_role"`
-	IdentifyViolations string `json:"identify_violations"`
-	ReturnFormat      string `json:"return_format"`
+	IdentifyViolations  string `json:"identify_violations"`
+	ReturnFormat        string `json:"return_format"`
+	SeverityGuide       string `json:"severity_guide"`
 }
 
 type ModuleAuditPrompts struct {
-	SystemRole   string `json:"system_role"`
-	ReturnFormat string `json:"return_format"`
+	SystemRole    string   `json:"system_role"`
+	ReturnFormat  string   `json:"return_format"`
+	Focus         []string `json:"focus"`
+	ScoringRubric string   `json:"scoring_rubric"`
 }
 
 type JSONSchema struct {
@@ -108,6 +111,16 @@ func GetPrompts(language string) *Prompts {
 
 func GetJSONSchema(language string) string {
 	p := GetPrompts(language)
+	if p == nil || p.JSONSchema.Score == "" {
+		return `{
+  "score": "<score>",
+  "summary": "<summary>",
+  "issues": [
+    {"severity": "<severity>", "message": "<message>", "location": "<location>", "suggestion": "<suggestion>"}
+  ],
+  "recommendations": ["<recommendation>"]
+}`
+	}
 	schema := JSONSchema{
 		Score:   p.JSONSchema.Score,
 		Summary: p.JSONSchema.Summary,

@@ -1,40 +1,69 @@
 {
-  "system_role": "You are a senior software architect performing an architecture review.",
+  "system_role": "You are a senior software architect performing a deep architecture review of a Go project. Your goal is to identify structural problems that affect long-term maintainability, testability, and scalability. Anchor every finding to a specific file path or package from the provided code. Distinguish between architectural violations (score-impacting) and minor suggestions (informational only).",
   "labels": {
     "modules": "Modules:",
     "layers": "Layers:",
     "root": "Root:",
     "paths": "Paths:",
-    "allowed": "Allowed:"
+    "allowed": "Allowed:",
+    "snapshot_section": "## Source Code Snapshot",
+    "snapshot_order_note": "Files are ordered by architectural significance (entry points, interfaces, and domain core first).",
+    "omitted_note": "%d file(s) omitted from snapshot due to 100 000 char limit — their structure is still reflected in the import graph and metrics below: %s",
+    "import_graph_section": "## Import Graph",
+    "cycles_detected": "### Cycles Detected [CYCLE]",
+    "layer_violations": "### Layer Violations [LAYER VIOLATION]",
+    "file_metrics_section": "## File Metrics",
+    "metrics_table_header": "| File | Lines | Exported Funcs | Exported Types | Has Tests |",
+    "large_file_marker": "(large)",
+    "review_intro": "Provide a structured architecture review focusing on:",
+    "scoring_rubric": "Scoring rubric — 90–100: clean layered architecture, no violations, well-scoped packages; 70–89: minor issues, limited coupling; 50–69: moderate coupling or SRP breaches, unclear layer boundaries; 30–49: significant problems — cycles, layer violations, god objects; 0–29: critical structural breakdown.",
+    "compliance_rules_section": "## Target Architecture Rules",
+    "compliance_structure_section": "## Current Project Structure",
+    "compliance_layer_label": "Layer:",
+    "module_path_label": "## Module:",
+    "module_source_label": "## Source Code",
+    "hotspots_section": "## Git Hotspots",
+    "hotspots_note": "Top frequently-modified files (change magnets — review coupling and complexity carefully):"
   },
   "review_focus": [
-    "Architecture style identification",
-    "Coupling and cohesion analysis",
-    "Maintainability assessment",
-    "Scalability evaluation",
-    "Issues and recommendations"
+    "Use the import graph to identify high fan-in packages (fragile foundations), high fan-out packages (unstable dependents), and dependency direction violations between layers",
+    "Evaluate files over 500 lines for single-responsibility violations — each file should have one clear purpose",
+    "Assess exported symbol counts per package: are they justified by the layer's role, or is the public surface unnecessarily wide?",
+    "Identify the architectural style (layered, hexagonal, flat) and evaluate its consistency across the codebase",
+    "Evaluate layer boundary integrity: does each layer depend only on layers below it?",
+    "Assess change propagation risk: which modules have the highest blast radius if modified?"
   ],
-  "json_schema_instruction": "Return ONLY a valid JSON object — no markdown fences, no explanation text. Schema:",
+  "json_schema_instruction": "Return ONLY a valid JSON object — no markdown fences, no explanation text, no trailing commentary. Each issue must reference a specific file or package in the 'location' field. Schema:",
   "json_schema": {
-    "score": "<integer 0-100>",
-    "summary": "<overall assessment in English>",
+    "score": "<integer 0-100, based on scoring rubric>",
+    "summary": "<2–4 sentence overall assessment: architectural style, main strengths, main risks>",
     "issues": [
       {
         "severity": "<critical|high|medium|low>",
-        "message": "<issue description>",
-        "location": "<file or component>",
-        "suggestion": "<how to fix>"
+        "message": "<specific problem description>",
+        "location": "<exact file path or package>",
+        "suggestion": "<concrete actionable fix>"
       }
     ],
-    "recommendations": ["<actionable recommendation>"]
+    "recommendations": ["<actionable recommendation tied to a specific file or pattern>"]
   },
   "compliance": {
-    "system_role": "You are performing an architecture compliance check.",
-    "identify_violations": "Identify any architecture violations.",
-    "return_format": "Return a structured report of violations with severity levels."
+    "system_role": "You are performing an architecture compliance check. Compare the actual project structure against the defined architectural rules and report every deviation with precision. Reference specific packages or files for each violation.",
+    "identify_violations": "For each rule layer, compare it against the current project structure. Report every deviation: which rule is violated, which files or packages are affected, and the architectural impact.",
+    "return_format": "Return a structured report of violations ordered by severity. If no violations are found, state that explicitly in the summary.",
+    "severity_guide": "Severity guide — CRITICAL: a forbidden dependency exists or a core architectural invariant is broken; HIGH: a required layer or component is entirely absent; MEDIUM: a component exists but resides in the wrong layer; LOW: naming or structural conventions deviate from rules without breaking functionality."
   },
   "module_audit": {
-    "system_role": "You are performing a module audit. Analyze the provided source code for correctness, design quality, coupling/cohesion, potential bugs, and complexity issues.",
-    "return_format": "Return a structured audit report."
+    "system_role": "You are performing a focused audit of a Go module. Analyze the provided source code for correctness, design quality, coupling, cohesion, potential bugs, and complexity. Anchor every finding to a specific function, type, or file within the provided code.",
+    "return_format": "Return a structured audit report. Every issue must reference a specific function or type in the 'location' field.",
+    "focus": [
+      "Single responsibility: does each file and function do one thing? Flag functions over 50 lines or files mixing unrelated concerns",
+      "Error handling: are errors propagated with context, wrapped properly, or silently ignored?",
+      "Exported API surface: are all exported symbols justified? Flag unnecessary exports that increase the module's coupling surface",
+      "Dependency injection: are external dependencies injected via interfaces, or hardcoded? Hardcoded deps reduce testability",
+      "Testability: can the module be tested in isolation? Flag hidden globals, package-level state, or init() side effects",
+      "Complexity signals: deeply nested conditionals, long parameter lists, large switch blocks, magic numbers"
+    ],
+    "scoring_rubric": "Scoring rubric — 90–100: focused module, clear responsibility, proper error handling, injectable deps; 70–89: minor issues, some large functions; 50–69: multiple SRP violations or coupling issues, some untestable paths; 30–49: god functions, hidden state, poor error handling; 0–29: module has no clear purpose, pervasive structural problems."
   }
 }

@@ -20,7 +20,7 @@ defaults: `PROVIDER=mock`, `LLM=gpt-4o`, `PORT=8080`, `LANGUAGE=ru`, HTTP timeou
 
 ```bash
 go build ./...     # Build
-go test ./...      # Test (70+ tests, 41% coverage)
+go test ./...      # Test
 ```
 
 ## Project Structure

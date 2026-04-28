@@ -17,9 +17,21 @@ import (
 	"github.com/vzx7/opencode-mcp/internal/llm"
 )
 
+func validatePath(p string) error {
+	if p == "" {
+		return nil
+	}
+	cleaned := filepath.Clean(p)
+	if strings.Contains(cleaned, "..") {
+		return fmt.Errorf("path traversal not allowed: %q", p)
+	}
+	return nil
+}
+
 const (
 	defaultModelAnthropic = "claude-3-5-sonnet-20241022"
 	defaultModelOpenAI    = "gpt-4o"
+	warnPromptChars       = 200_000
 )
 
 type ToolExecutor struct {
@@ -30,6 +42,7 @@ type ToolExecutor struct {
 	mu        sync.RWMutex
 	debug     bool
 	logger    *log.Logger
+	llmSem    chan struct{} // semaphore for LLM call concurrency limit
 }
 
 type ToolExecutorConfig struct {
@@ -55,6 +68,7 @@ func NewToolExecutor(cfg ToolExecutorConfig) *ToolExecutor {
 		endpoint:   cfg.Endpoint,
 		debug:     cfg.Debug,
 		logger:    cfg.Logger,
+		llmSem:    make(chan struct{}, 3),
 	}
 }
 
@@ -65,6 +79,19 @@ func (te *ToolExecutor) SetDebug(debug bool) {
 	if debug && te.logger == nil {
 		te.logger = log.New(os.Stdout, "[TOOL] ", log.LstdFlags)
 	}
+}
+
+func (te *ToolExecutor) acquireLLM(ctx context.Context) error {
+	select {
+	case te.llmSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (te *ToolExecutor) releaseLLM() {
+	<-te.llmSem
 }
 
 type ToolInput struct {
@@ -111,6 +138,7 @@ func (te *ToolExecutor) getLanguage(language string) string {
 
 type ArchitectureReviewInput struct {
 	ToolInput
+	IncludePaths []string `json:"include_paths,omitempty"`
 }
 
 func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input ArchitectureReviewInput) (*domain.AuditReport, error) {
@@ -120,6 +148,10 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 	}
 	if projectPath == "" {
 		projectPath = "."
+	}
+
+	if err := validatePath(projectPath); err != nil {
+		return nil, err
 	}
 
 	analyzerEngine := analyzer.New(projectPath)
@@ -138,7 +170,31 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("failed to collect file metrics: %w", err)
 	}
 
-	snapshot, omitted := te.buildCodeSnapshot(projectPath, 100000)
+	snapshot, snapshotOrder, omitted := te.buildCodeSnapshot(projectPath, input.IncludePaths, 100000)
+
+	hotspots, _ := analyzerEngine.CollectGitHotspots(10)
+
+	te.mu.RLock()
+	logger := te.logger
+	te.mu.RUnlock()
+
+	if logger != nil {
+		if len(input.IncludePaths) > 0 {
+			logger.Printf("[snapshot] mode=include_paths count=%d", len(input.IncludePaths))
+			for _, p := range input.IncludePaths {
+				logger.Printf("[snapshot]   + %s", p)
+			}
+		} else {
+			logger.Printf("[snapshot] mode=autodiscover")
+		}
+		logger.Printf("[snapshot] selected=%d omitted=%d", len(snapshot), len(omitted))
+		for i, p := range snapshotOrder {
+			logger.Printf("[snapshot]   >> [%d] %s", i+1, p)
+		}
+		for _, p := range omitted {
+			logger.Printf("[snapshot]   -- %s (omitted)", p)
+		}
+	}
 
 	llmProvider, err := te.getLLM(input.Provider, input.LLM)
 	if err != nil {
@@ -148,16 +204,25 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		return nil, fmt.Errorf("LLM provider is nil")
 	}
 	language := te.getLanguage(input.Language)
-	prompt := llm.BuildReviewPrompt(pm, snapshot, omitted, graph, metrics, language)
+	prompt := llm.BuildReviewPrompt(pm, snapshot, snapshotOrder, omitted, graph, metrics, hotspots, language)
 
 	te.mu.RLock()
 	debug := te.debug
-	logger := te.logger
+	logger = te.logger
 	te.mu.RUnlock()
+
+	if len(prompt) > warnPromptChars && logger != nil {
+		logger.Printf("[WARN] prompt size %d chars may exceed model context window", len(prompt))
+	}
 
 	if debug && logger != nil {
 		logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 	}
+
+	if err := te.acquireLLM(ctx); err != nil {
+		return nil, fmt.Errorf("failed to acquire LLM semaphore: %w", err)
+	}
+	defer te.releaseLLM()
 
 	llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 	if err != nil {
@@ -229,7 +294,6 @@ func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *
 			Location:   pm.Root,
 			Suggestion: "Ensure project has proper Go module structure",
 		})
-		report.Score -= 20
 	}
 
 	if len(pm.Layers) < 2 {
@@ -239,7 +303,6 @@ func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *
 			Location:  pm.Root,
 			Suggestion: "Consider adopting layered architecture (cmd, internal, pkg)",
 		})
-		report.Score -= 10
 	}
 
 	hasInternal := false
@@ -260,30 +323,14 @@ func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *
 			Location:  pm.Root,
 			Suggestion: "Consider adding internal package for private code",
 		})
-		report.Score -= 5
 	}
 
 	if !hasCmd {
 		report.Recommendations = append(report.Recommendations, "Consider adding cmd/ for entrypoints")
 	}
-
-	if report.Score < 0 {
-		report.Score = 0
-	}
 }
 
 func (te *ToolExecutor) enrichWithGraphAnalysis(report *domain.AuditReport, graph *domain.ImportGraph, metrics []domain.FileMetric) {
-	packagesWithFiles := make(map[string]bool)
-	packagesWithTests := make(map[string]bool)
-
-	for _, m := range metrics {
-		dir := filepath.Dir(m.Path)
-		packagesWithFiles[dir] = true
-		if m.HasTests {
-			packagesWithTests[dir] = true
-		}
-	}
-
 	for _, cycle := range graph.Cycles {
 		report.Issues = append(report.Issues, domain.Issue{
 			Severity:   domain.SeverityCritical,
@@ -291,7 +338,6 @@ func (te *ToolExecutor) enrichWithGraphAnalysis(report *domain.AuditReport, grap
 			Location:   strings.Join(cycle, ", "),
 			Suggestion: "Break the cycle by introducing an interface or restructuring dependencies",
 		})
-		report.Score -= 20
 	}
 
 	for _, v := range graph.LayerViolations {
@@ -301,35 +347,6 @@ func (te *ToolExecutor) enrichWithGraphAnalysis(report *domain.AuditReport, grap
 			Location:   v.From,
 			Suggestion: fmt.Sprintf("Ensure %s does not depend on %s", v.From, v.To),
 		})
-		report.Score -= 10
-	}
-
-	for _, m := range metrics {
-		if m.Lines > 500 {
-			report.Issues = append(report.Issues, domain.Issue{
-				Severity:   domain.SeverityMedium,
-				Message:    fmt.Sprintf("Large file: %s (%d lines)", m.Path, m.Lines),
-				Location:   m.Path,
-				Suggestion: "Consider splitting into smaller files with single responsibilities",
-			})
-			report.Score -= 5
-		}
-	}
-
-	for pkg := range packagesWithFiles {
-		if !packagesWithTests[pkg] {
-			report.Issues = append(report.Issues, domain.Issue{
-				Severity:   domain.SeverityLow,
-				Message:    fmt.Sprintf("Package has no test files: %s", pkg),
-				Location:   pkg,
-				Suggestion: "Add unit tests for this package",
-			})
-			report.Score -= 2
-		}
-	}
-
-	if report.Score < 0 {
-		report.Score = 0
 	}
 }
 
@@ -347,11 +364,17 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 		projectPath = "."
 	}
 
+	if err := validatePath(projectPath); err != nil {
+		return nil, err
+	}
+
 	analyzerEngine := analyzer.New(projectPath)
 	pm, err := analyzerEngine.BuildProjectMap()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build project map: %w", err)
 	}
+
+	graph, _ := analyzerEngine.BuildImportGraph(pm)
 
 	rules := input.TargetArchitecture
 	if rules == nil {
@@ -366,16 +389,25 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 	}
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
-		prompt := llm.BuildCompliancePrompt(rules, pm, language)
+		prompt := llm.BuildCompliancePrompt(rules, pm, graph, language)
 
 		te.mu.RLock()
 		debug := te.debug
 		logger := te.logger
 		te.mu.RUnlock()
 
+		if len(prompt) > warnPromptChars && logger != nil {
+			logger.Printf("[WARN] prompt size %d chars may exceed model context window", len(prompt))
+		}
+
 		if debug && logger != nil {
 			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
+
+		if err := te.acquireLLM(ctx); err != nil {
+			return nil, fmt.Errorf("failed to acquire LLM semaphore: %w", err)
+		}
+		defer te.releaseLLM()
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
@@ -383,6 +415,9 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 			}
 			llmReport := parseLLMResponse(llmResponse)
+			if llmReport.Score > 0 {
+				report.Score = llmReport.Score
+			}
 			report.Summary = llmReport.Summary
 			report.Issues = append(report.Issues, llmReport.Issues...)
 			report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
@@ -417,9 +452,17 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 		projectPath = "."
 	}
 
+	if err := validatePath(projectPath); err != nil {
+		return nil, err
+	}
+
 	modulePath := input.ModulePath
 	if modulePath == "" {
 		modulePath = projectPath
+	}
+
+	if err := validatePath(modulePath); err != nil {
+		return nil, err
 	}
 
 	analyzerEngine := analyzer.New(projectPath)
@@ -446,9 +489,18 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 		logger := te.logger
 		te.mu.RUnlock()
 
+		if len(prompt) > warnPromptChars && logger != nil {
+			logger.Printf("[WARN] prompt size %d chars may exceed model context window", len(prompt))
+		}
+
 		if debug && logger != nil {
 			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
+
+		if err := te.acquireLLM(ctx); err != nil {
+			return nil, fmt.Errorf("failed to acquire LLM semaphore: %w", err)
+		}
+		defer te.releaseLLM()
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
 		if err == nil {
@@ -521,30 +573,49 @@ type fileSize struct {
 	size int64
 }
 
-func (te *ToolExecutor) buildCodeSnapshot(projectPath string, maxChars int) (map[string]string, []string) {
+func (te *ToolExecutor) buildCodeSnapshot(projectPath string, includePaths []string, maxChars int) (map[string]string, []string, []string) {
 	snapshot := make(map[string]string)
+	var order []string
 	var omitted []string
 
 	var files []fileSize
-	filepath.Walk(projectPath, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return nil
+
+	if len(includePaths) > 0 {
+		// preserve priority order from caller — no sorting
+		for _, p := range includePaths {
+			absPath := p
+			if !filepath.IsAbs(p) {
+				absPath = filepath.Join(projectPath, p)
+			}
+			info, err := os.Stat(absPath)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+				files = append(files, fileSize{path: absPath, size: info.Size()})
+			}
 		}
-		if info.IsDir() {
-			if strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor" {
-				return filepath.SkipDir
+	} else {
+		filepath.Walk(projectPath, func(path string, info fs.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				if strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
+				files = append(files, fileSize{path: path, size: info.Size()})
 			}
 			return nil
-		}
-		if strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go") {
-			files = append(files, fileSize{path: path, size: info.Size()})
-		}
-		return nil
-	})
+		})
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].size > files[j].size
-	})
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].size > files[j].size
+		})
+	}
 
 	totalChars := 0
 	for _, f := range files {
@@ -563,8 +634,9 @@ func (te *ToolExecutor) buildCodeSnapshot(projectPath string, maxChars int) (map
 		}
 
 		snapshot[relPath] = string(data)
+		order = append(order, relPath)
 		totalChars += chars
 	}
 
-	return snapshot, omitted
+	return snapshot, order, omitted
 }

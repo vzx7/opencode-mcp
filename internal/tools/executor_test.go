@@ -318,9 +318,12 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "big.go"), []byte("package main\n"+string(make([]byte, 1000))), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "small.go"), []byte("package main"), 0644)
 
-		snapshot, omitted := te.buildCodeSnapshot(tmpDir, 5000)
+		snapshot, order, omitted := te.buildCodeSnapshot(tmpDir, nil, 5000)
 		if len(snapshot) != 2 {
 			t.Errorf("expected 2 files, got %d", len(snapshot))
+		}
+		if len(order) != 2 {
+			t.Errorf("expected order len 2, got %d", len(order))
 		}
 		if len(omitted) != 0 {
 			t.Errorf("expected 0 omitted, got %d", len(omitted))
@@ -332,7 +335,7 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package main\n"+string(make([]byte, 2000))), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package main\n"+string(make([]byte, 2000))), 0644)
 
-		snapshot, omitted := te.buildCodeSnapshot(tmpDir, 2500)
+		snapshot, _, omitted := te.buildCodeSnapshot(tmpDir, nil, 2500)
 		if len(snapshot) == 0 {
 			t.Error("expected at least one file")
 		}
@@ -347,7 +350,7 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "vendor", "dep.go"), []byte("package dep"), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
 
-		snapshot, _ := te.buildCodeSnapshot(tmpDir, 5000)
+		snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 5000)
 		if len(snapshot) != 1 {
 			t.Errorf("expected 1 file (skip vendor), got %d", len(snapshot))
 		}
@@ -358,9 +361,50 @@ func TestBuildCodeSnapshot(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
 		os.WriteFile(filepath.Join(tmpDir, "app_test.go"), []byte("package main"), 0644)
 
-		snapshot, _ := te.buildCodeSnapshot(tmpDir, 5000)
+		snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 5000)
 		if len(snapshot) != 1 {
 			t.Errorf("expected 1 file (skip test), got %d", len(snapshot))
+		}
+	})
+
+	t.Run("uses include_paths when provided", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package main"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package main"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "c.go"), []byte("package main"), 0644)
+
+		snapshot, order, omitted := te.buildCodeSnapshot(tmpDir, []string{filepath.Join(tmpDir, "a.go")}, 5000)
+		if len(snapshot) != 1 {
+			t.Errorf("expected 1 file from include_paths, got %d", len(snapshot))
+		}
+		if _, ok := snapshot["a.go"]; !ok {
+			t.Error("expected a.go in snapshot")
+		}
+		if len(order) != 1 || order[0] != "a.go" {
+			t.Errorf("expected order=[a.go], got %v", order)
+		}
+		if len(omitted) != 0 {
+			t.Errorf("expected 0 omitted, got %d", len(omitted))
+		}
+	})
+
+	t.Run("include_paths preserves priority order", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "first.go"), []byte("package main // priority 1"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "second.go"), []byte("package main // priority 2"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "third.go"), []byte("package main // priority 3"), 0644)
+
+		paths := []string{
+			filepath.Join(tmpDir, "first.go"),
+			filepath.Join(tmpDir, "second.go"),
+			filepath.Join(tmpDir, "third.go"),
+		}
+		_, order, _ := te.buildCodeSnapshot(tmpDir, paths, 5000)
+		if len(order) != 3 {
+			t.Fatalf("expected 3 in order, got %d", len(order))
+		}
+		if order[0] != "first.go" || order[1] != "second.go" || order[2] != "third.go" {
+			t.Errorf("order not preserved: %v", order)
 		}
 	})
 }
@@ -387,8 +431,9 @@ func TestEnrichWithGraphAnalysis(t *testing.T) {
 		if !found {
 			t.Error("expected critical issue for cycle")
 		}
-		if report.Score >= 100 {
-			t.Error("expected score penalty for cycle")
+		// Score is set only by LLM — engine does not modify it
+		if report.Score != 100 {
+			t.Errorf("expected score unchanged (100), got %d", report.Score)
 		}
 	})
 
@@ -414,7 +459,7 @@ func TestEnrichWithGraphAnalysis(t *testing.T) {
 		}
 	})
 
-	t.Run("adds large file as medium", func(t *testing.T) {
+	t.Run("large files not added by engine (LLM sees them in metrics)", func(t *testing.T) {
 		report := &domain.AuditReport{Score: 100, Issues: []domain.Issue{}}
 		graph := &domain.ImportGraph{}
 		metrics := []domain.FileMetric{
@@ -423,18 +468,14 @@ func TestEnrichWithGraphAnalysis(t *testing.T) {
 
 		te.enrichWithGraphAnalysis(report, graph, metrics)
 
-		found := false
 		for _, iss := range report.Issues {
-			if iss.Severity == domain.SeverityMedium && strings.Contains(iss.Message, "big.go") {
-				found = true
+			if strings.Contains(iss.Message, "big.go") {
+				t.Error("engine should not add large file issues — LLM handles them via metrics table")
 			}
-		}
-		if !found {
-			t.Error("expected medium issue for large file")
 		}
 	})
 
-	t.Run("adds missing tests as low", func(t *testing.T) {
+	t.Run("missing tests not added by engine (LLM sees metrics)", func(t *testing.T) {
 		report := &domain.AuditReport{Score: 100, Issues: []domain.Issue{}}
 		graph := &domain.ImportGraph{}
 		metrics := []domain.FileMetric{
@@ -443,18 +484,14 @@ func TestEnrichWithGraphAnalysis(t *testing.T) {
 
 		te.enrichWithGraphAnalysis(report, graph, metrics)
 
-		found := false
 		for _, iss := range report.Issues {
-			if iss.Severity == domain.SeverityLow && strings.Contains(iss.Message, "no test files") {
-				found = true
+			if strings.Contains(iss.Message, "no test files") {
+				t.Error("engine should not add missing test issues — LLM handles them via metrics table")
 			}
-		}
-		if !found {
-			t.Error("expected low issue for missing tests")
 		}
 	})
 
-	t.Run("score not negative", func(t *testing.T) {
+	t.Run("score unchanged by engine", func(t *testing.T) {
 		report := &domain.AuditReport{Score: 10, Issues: []domain.Issue{}}
 		graph := &domain.ImportGraph{
 			Cycles: [][]string{{"a", "b"}},
@@ -463,8 +500,8 @@ func TestEnrichWithGraphAnalysis(t *testing.T) {
 
 		te.enrichWithGraphAnalysis(report, graph, metrics)
 
-		if report.Score < 0 {
-			t.Errorf("score = %d, should not be negative", report.Score)
+		if report.Score != 10 {
+			t.Errorf("score = %d, engine should not modify score", report.Score)
 		}
 	})
 }

@@ -252,7 +252,7 @@ func TestBuildPrompts(t *testing.T) {
 			Layers:  []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
 		graph := &ImportGraph{Edges: make(map[string][]string)}
-		prompt := BuildReviewPrompt(pm, nil, nil, graph, nil, "en")
+		prompt := BuildReviewPrompt(pm, nil, nil, nil, graph, nil, nil, "en")
 		if !contains(prompt, ToolMarkerReview) {
 			t.Error("expected tool marker in review prompt")
 		}
@@ -265,7 +265,7 @@ func TestBuildPrompts(t *testing.T) {
 			Layers:  []domain.ArchitectureLayer{{Name: "cmd", Paths: []string{"cmd"}}},
 		}
 		graph := &ImportGraph{Edges: make(map[string][]string)}
-		prompt := BuildReviewPrompt(pm, nil, nil, graph, nil, "ru")
+		prompt := BuildReviewPrompt(pm, nil, nil, nil, graph, nil, nil, "ru")
 		if !contains(prompt, "Модули:") {
 			t.Error("expected russian labels")
 		}
@@ -274,7 +274,7 @@ func TestBuildPrompts(t *testing.T) {
 	t.Run("BuildCompliancePrompt contains marker", func(t *testing.T) {
 		prompt := BuildCompliancePrompt(&domain.ArchitectureRules{
 			Layers: []domain.LayerRule{{Name: "cmd", Paths: []string{"cmd"}, Allow: []string{"main"}}},
-		}, &domain.ProjectMap{Root: "/test", Layers: []domain.ArchitectureLayer{}}, "en")
+		}, &domain.ProjectMap{Root: "/test", Layers: []domain.ArchitectureLayer{}}, nil, "en")
 		if !contains(prompt, ToolMarkerCompliance) {
 			t.Error("expected tool marker in compliance prompt")
 		}
