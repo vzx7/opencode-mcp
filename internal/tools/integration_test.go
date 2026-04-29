@@ -2,12 +2,17 @@ package tools
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/vzx7/opencode-mcp/internal/llm"
 )
 
 func TestArchitectureReviewIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0644)
+
 	te := NewToolExecutor(ToolExecutorConfig{
 		LLM:     llm.NewMockProvider(),
 		Language: "en",
@@ -15,9 +20,10 @@ func TestArchitectureReviewIntegration(t *testing.T) {
 
 	input := ArchitectureReviewInput{
 		ToolInput: ToolInput{
-			Provider: "mock",
-			LLM:      "mock",
-			Language:  "en",
+			ProjectPath: tmpDir,
+			Provider:    "mock",
+			LLM:        "mock",
+			Language:    "en",
 		},
 	}
 
@@ -38,6 +44,9 @@ func TestArchitectureReviewIntegration(t *testing.T) {
 }
 
 func TestArchitectureComplianceIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0644)
+
 	te := NewToolExecutor(ToolExecutorConfig{
 		LLM:     llm.NewMockProvider(),
 		Language: "en",
@@ -45,9 +54,10 @@ func TestArchitectureComplianceIntegration(t *testing.T) {
 
 	input := ArchitectureComplianceInput{
 		ToolInput: ToolInput{
-			Provider: "mock",
-			LLM:      "mock",
-			Language:  "en",
+			ProjectPath: tmpDir,
+			Provider:    "mock",
+			LLM:        "mock",
+			Language:    "en",
 		},
 	}
 
@@ -68,6 +78,9 @@ func TestArchitectureComplianceIntegration(t *testing.T) {
 }
 
 func TestModuleAuditIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0644)
+
 	te := NewToolExecutor(ToolExecutorConfig{
 		LLM:     llm.NewMockProvider(),
 		Language: "en",
@@ -75,9 +88,10 @@ func TestModuleAuditIntegration(t *testing.T) {
 
 	input := ModuleAuditInput{
 		ToolInput: ToolInput{
-			Provider: "mock",
-			LLM:      "mock",
-			Language:  "en",
+			ProjectPath: tmpDir,
+			Provider:    "mock",
+			LLM:        "mock",
+			Language:    "en",
 		},
 	}
 

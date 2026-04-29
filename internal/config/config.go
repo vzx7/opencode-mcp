@@ -15,7 +15,6 @@ type Config struct {
 	OpenAIKey string
 	AnthropicKey string
 	Endpoint  string
-	Project   string
 	Port      string
 	Language  string
 }
@@ -49,7 +48,6 @@ func Load() (*Config, error) {
 		OpenAIKey:   os.Getenv("OPENAI_API_KEY"),
 		AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"),
 		Endpoint: os.Getenv("ENDPOINT"),
-		Project:  os.Getenv("PROJECT"),
 		Port:     getEnv("PORT", "8080"),
 		Language: getEnv("LANGUAGE", "ru"),
 	}

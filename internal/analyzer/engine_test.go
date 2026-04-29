@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vzx7/opencode-mcp/internal/domain"
@@ -60,33 +61,129 @@ func TestBuildProjectMap(t *testing.T) {
 }
 
 func TestCheckCompliance(t *testing.T) {
-	tmpDir := t.TempDir()
+	t.Run("all layers present, no violations", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, "cmd"), 0755)
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "domain"), 0755)
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "service"), 0755)
 
-	os.MkdirAll(filepath.Join(tmpDir, "cmd", "main"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "cmd", "main", "main.go"), []byte("package main"), 0644)
+		a := New(tmpDir)
+		pm, _ := a.BuildProjectMap()
+		pm.Dependencies = map[string][]string{
+			"cmd": {"internal/service"},
+		}
 
-	os.MkdirAll(filepath.Join(tmpDir, "internal", "api"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "internal", "api", "handler.go"), []byte("package api"), 0644)
+		rules := &domain.ArchitectureRules{
+			Layers: []domain.LayerRule{
+				{Name: "cmd", Paths: []string{"cmd"}, Allow: []string{"service"}},
+				{Name: "domain", Paths: []string{"internal/domain"}, Allow: []string{}},
+				{Name: "service", Paths: []string{"internal/service"}, Allow: []string{"domain"}},
+			},
+		}
 
-	a := New(tmpDir)
-	pm, _ := a.BuildProjectMap()
+		report := a.CheckCompliance(rules, pm)
+		if report == nil {
+			t.Fatal("nil report")
+		}
+		if len(report.Issues) != 0 {
+			t.Errorf("expected 0 issues, got %d: %v", len(report.Issues), report.Issues)
+		}
+		if report.Score != 100 {
+			t.Errorf("Score = %d, want 100", report.Score)
+		}
+	})
 
-	rules := &domain.ArchitectureRules{
-		Layers: []domain.LayerRule{
-			{Name: "cmd", Paths: []string{"cmd"}, Allow: []string{"main"}},
-			{Name: "internal", Paths: []string{"internal"}, Allow: []string{"api"}},
-		},
-	}
+	t.Run("missing layer detected", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, "cmd"), 0755)
 
-	report := a.CheckCompliance(rules, pm)
+		a := New(tmpDir)
+		pm, _ := a.BuildProjectMap()
 
-	if report == nil {
-		t.Fatal("CheckCompliance returned nil")
-	}
+		rules := &domain.ArchitectureRules{
+			Layers: []domain.LayerRule{
+				{Name: "cmd", Paths: []string{"cmd"}, Allow: []string{}},
+				{Name: "domain", Paths: []string{"internal/domain"}, Allow: []string{}},
+			},
+		}
 
-	if report.Score < 0 || report.Score > 100 {
-		t.Errorf("Score = %d, expected 0-100", report.Score)
-	}
+		report := a.CheckCompliance(rules, pm)
+		foundMissing := false
+		for _, issue := range report.Issues {
+			if strings.Contains(issue.Message, "domain") {
+				foundMissing = true
+			}
+		}
+		if !foundMissing {
+			t.Error("expected missing layer issue for 'domain'")
+		}
+	})
+
+	t.Run("forbidden dependency detected", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "domain"), 0755)
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "service"), 0755)
+
+		a := New(tmpDir)
+		pm, _ := a.BuildProjectMap()
+		pm.Dependencies = map[string][]string{
+			"internal/domain": {"internal/service"},
+		}
+
+		rules := &domain.ArchitectureRules{
+			Layers: []domain.LayerRule{
+				{Name: "domain", Paths: []string{"internal/domain"}, Allow: []string{}},
+				{Name: "service", Paths: []string{"internal/service"}, Allow: []string{"domain"}},
+			},
+			Dependencies: []domain.DependencyRule{
+				{From: "domain", To: "service", Reason: "domain must have no internal imports"},
+			},
+		}
+
+		report := a.CheckCompliance(rules, pm)
+		foundForbidden := false
+		for _, issue := range report.Issues {
+			if issue.Severity == domain.SeverityCritical && strings.Contains(issue.Message, "Forbidden") {
+				foundForbidden = true
+			}
+		}
+		if !foundForbidden {
+			t.Error("expected critical forbidden dependency issue")
+		}
+	})
+
+	t.Run("allow_imports_from violation detected", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "domain"), 0755)
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "llm"), 0755)
+		os.MkdirAll(filepath.Join(tmpDir, "internal", "tools"), 0755)
+
+		a := New(tmpDir)
+		pm, _ := a.BuildProjectMap()
+		// llm imports tools — not allowed
+		pm.Dependencies = map[string][]string{
+			"internal/llm": {"internal/tools"},
+		}
+
+		rules := &domain.ArchitectureRules{
+			Layers: []domain.LayerRule{
+				{Name: "domain", Paths: []string{"internal/domain"}, Allow: []string{}},
+				{Name: "llm", Paths: []string{"internal/llm"}, Allow: []string{"domain"}},
+				{Name: "tools", Paths: []string{"internal/tools"}, Allow: []string{"domain", "llm"}},
+			},
+		}
+
+		report := a.CheckCompliance(rules, pm)
+		foundViolation := false
+		for _, issue := range report.Issues {
+			if issue.Severity == domain.SeverityHigh && strings.Contains(issue.Message, "llm") {
+				foundViolation = true
+			}
+		}
+		if !foundViolation {
+			t.Error("expected high severity allow_imports_from violation for llm→tools")
+		}
+	})
 }
 
 func TestFindEntrypoints(t *testing.T) {

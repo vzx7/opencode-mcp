@@ -46,14 +46,6 @@ func TestNewToolExecutor(t *testing.T) {
 			},
 			wantLang: "en",
 		},
-		{
-			name: "with default path",
-			cfg: ToolExecutorConfig{
-				DefaultPath: "/test/path",
-				LLM:         mockLLM,
-			},
-			wantLang: "en",
-		},
 	}
 
 	for _, tt := range tests {
@@ -61,9 +53,6 @@ func TestNewToolExecutor(t *testing.T) {
 			te := NewToolExecutor(tt.cfg)
 			if te.defaultLang != tt.wantLang {
 				t.Errorf("defaultLang = %q, want %q", te.defaultLang, tt.wantLang)
-			}
-			if tt.cfg.DefaultPath != "" && te.defaultPath != tt.cfg.DefaultPath {
-				t.Errorf("defaultPath = %q, want %q", te.defaultPath, tt.cfg.DefaultPath)
 			}
 		})
 	}
@@ -181,8 +170,7 @@ func TestParseLLMResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			te := &ToolExecutor{}
-			report := te.buildReportFromLLM(tt.response)
+			report := parseLLMResponse(tt.response)
 			if report.Score != tt.wantScore {
 				t.Errorf("Score = %d, want %d", report.Score, tt.wantScore)
 			}
@@ -300,15 +288,42 @@ func TestArchitectureReview(t *testing.T) {
 	mockLLM := &mockProvider{name: "mock"}
 	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
 
-	t.Run("uses default path when empty", func(t *testing.T) {
-		te.defaultPath = "/tmp"
+	t.Run("returns error when project_path is empty", func(t *testing.T) {
 		input := ArchitectureReviewInput{
 			ToolInput: ToolInput{ProjectPath: ""},
 		}
 
 		_, err := te.ArchitectureReview(context.Background(), input)
+		if err == nil {
+			t.Error("expected error for empty project_path, got nil")
+		}
+	})
+
+	t.Run("successful review with valid project", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0644)
+
+		input := ArchitectureReviewInput{
+			ToolInput: ToolInput{
+				ProjectPath: tmpDir,
+				Provider:    "mock",
+				LLM:        "mock",
+				Language:    "en",
+			},
+		}
+
+		report, err := te.ArchitectureReview(context.Background(), input)
 		if err != nil {
-			t.Logf("ArchitectureReview error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Fatal("expected non-nil report")
+		}
+		if report.Score < 0 || report.Score > 100 {
+			t.Errorf("score %d out of range [0,100]", report.Score)
+		}
+		if report.Summary == "" {
+			t.Error("expected non-empty summary")
 		}
 	})
 }

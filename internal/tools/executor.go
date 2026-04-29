@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vzx7/opencode-mcp/internal/analyzer"
 	"github.com/vzx7/opencode-mcp/internal/domain"
@@ -80,7 +81,6 @@ const (
 )
 
 type ToolExecutor struct {
-	defaultPath string
 	defaultLLM  llm.LLMProvider
 	defaultLang string
 	endpoint    string
@@ -91,7 +91,6 @@ type ToolExecutor struct {
 }
 
 type ToolExecutorConfig struct {
-	DefaultPath string
 	LLM         llm.LLMProvider
 	Endpoint    string
 	Language    string
@@ -107,7 +106,6 @@ func NewToolExecutor(cfg ToolExecutorConfig) *ToolExecutor {
 		cfg.Logger = log.New(os.Stdout, "[TOOL] ", log.LstdFlags)
 	}
 	return &ToolExecutor{
-		defaultPath: cfg.DefaultPath,
 		defaultLLM:  cfg.LLM,
 		defaultLang: cfg.Language,
 		endpoint:    cfg.Endpoint,
@@ -137,6 +135,35 @@ func (te *ToolExecutor) acquireLLM(ctx context.Context) error {
 
 func (te *ToolExecutor) releaseLLM() {
 	<-te.llmSem
+}
+
+// savePrompt saves the prompt to the debug/input directory if debugDir is not empty.
+func savePrompt(toolName, prompt, language, debugDir string) {
+	if debugDir == "" {
+		return
+	}
+
+	inputDir := filepath.Join(debugDir, "input")
+	if err := os.MkdirAll(inputDir, 0755); err != nil {
+		return
+	}
+
+	now := time.Now()
+	filename := fmt.Sprintf("%s_%s_%d_prompt.md",
+		toolName,
+		now.Format("20060102_150405"),
+		now.UnixNano(),
+	)
+	path := filepath.Join(inputDir, filename)
+
+	content := fmt.Sprintf("# Prompt: %s\n**Language:** %s\n**Time:** %s\n---\n\n%s",
+		toolName,
+		language,
+		now.Format("2006-01-02 15:04:05"),
+		prompt,
+	)
+
+	_ = os.WriteFile(path, []byte(content), 0644)
 }
 
 type ToolInput struct {
@@ -188,13 +215,10 @@ type ArchitectureReviewInput struct {
 }
 
 func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input ArchitectureReviewInput) (*domain.AuditReport, error) {
+	if input.ProjectPath == "" {
+		return nil, fmt.Errorf("project_path is required")
+	}
 	projectPath := input.ProjectPath
-	if projectPath == "" {
-		projectPath = te.defaultPath
-	}
-	if projectPath == "" {
-		projectPath = "."
-	}
 
 	if err := validatePath(projectPath); err != nil {
 		return nil, err
@@ -220,28 +244,6 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 
 	hotspots, _ := analyzerEngine.CollectGitHotspots(10)
 
-	te.mu.RLock()
-	logger := te.logger
-	te.mu.RUnlock()
-
-	if logger != nil {
-		if len(input.IncludePaths) > 0 {
-			logger.Printf("[snapshot] mode=include_paths count=%d", len(input.IncludePaths))
-			for _, p := range input.IncludePaths {
-				logger.Printf("[snapshot]   + %s", p)
-			}
-		} else {
-			logger.Printf("[snapshot] mode=autodiscover")
-		}
-		logger.Printf("[snapshot] selected=%d omitted=%d", len(snapshot), len(omitted))
-		for i, p := range snapshotOrder {
-			logger.Printf("[snapshot]   >> [%d] %s", i+1, p)
-		}
-		for _, p := range omitted {
-			logger.Printf("[snapshot]   -- %s (omitted)", p)
-		}
-	}
-
 	llmProvider, err := te.getLLM(input.Provider, input.LLM)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM: %w", err)
@@ -254,11 +256,15 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 
 	te.mu.RLock()
 	debug := te.debug
-	logger = te.logger
+	logger := te.logger
 	te.mu.RUnlock()
 
 	if len(prompt) > warnPromptChars && logger != nil {
 		logger.Printf("[WARN] prompt size %d chars may exceed model context window", len(prompt))
+	}
+
+	if debug {
+		savePrompt("architecture_review", prompt, language, filepath.Join(projectPath, "debug"))
 	}
 
 	if debug && logger != nil {
@@ -282,7 +288,7 @@ func (te *ToolExecutor) ArchitectureReview(ctx context.Context, input Architectu
 		logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
 	}
 
-	report := te.buildReportFromLLM(llmResponse)
+	report := parseLLMResponse(llmResponse)
 	te.enrichWithLocalAnalysis(report, pm)
 	te.enrichWithGraphAnalysis(report, graph, metrics)
 
@@ -323,10 +329,6 @@ func parseLLMResponse(response string) *domain.AuditReport {
 		Issues:          []domain.Issue{},
 		Recommendations: []string{},
 	}
-}
-
-func (te *ToolExecutor) buildReportFromLLM(response string) *domain.AuditReport {
-	return parseLLMResponse(response)
 }
 
 func (te *ToolExecutor) enrichWithLocalAnalysis(report *domain.AuditReport, pm *domain.ProjectMap) {
@@ -401,13 +403,10 @@ type ArchitectureComplianceInput struct {
 }
 
 func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input ArchitectureComplianceInput) (*domain.AuditReport, error) {
+	if input.ProjectPath == "" {
+		return nil, fmt.Errorf("project_path is required")
+	}
 	projectPath := input.ProjectPath
-	if projectPath == "" {
-		projectPath = te.defaultPath
-	}
-	if projectPath == "" {
-		projectPath = "."
-	}
 
 	if err := validatePath(projectPath); err != nil {
 		return nil, err
@@ -420,6 +419,9 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 	}
 
 	graph, _ := analyzerEngine.BuildImportGraph()
+	if graph != nil {
+		pm.Dependencies = graph.Edges
+	}
 
 	rules := input.TargetArchitecture
 	if rules == nil {
@@ -443,16 +445,21 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 		return nil, fmt.Errorf("failed to get LLM: %w", err)
 	}
 	language := te.getLanguage(input.Language)
+
+	te.mu.RLock()
+	debug := te.debug
+	logger := te.logger
+	te.mu.RUnlock()
+
 	if llmProvider != nil {
 		prompt := llm.BuildCompliancePrompt(rules, pm, graph, nil, nil, snapshot, snapshotOrder, snapshotOmitted, analyzerEngine.SnippetLang(), language)
 
-		te.mu.RLock()
-		debug := te.debug
-		logger := te.logger
-		te.mu.RUnlock()
-
 		if len(prompt) > warnPromptChars && logger != nil {
 			logger.Printf("[WARN] prompt size %d chars may exceed model context window", len(prompt))
+		}
+
+		if debug {
+			savePrompt("architecture_compliance_check", prompt, language, filepath.Join(projectPath, "debug"))
 		}
 
 		if debug && logger != nil {
@@ -465,18 +472,23 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 		defer te.releaseLLM()
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
-		if err == nil {
+		if err != nil {
 			if debug && logger != nil {
-				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+				logger.Printf("<<< LLM Error: %v", err)
 			}
-			llmReport := parseLLMResponse(llmResponse)
-			if llmReport.Score > 0 {
-				report.Score = llmReport.Score
-			}
-			report.Summary = llmReport.Summary
-			report.Issues = append(report.Issues, llmReport.Issues...)
-			report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
+			return nil, fmt.Errorf("LLM call failed: %w", err)
 		}
+
+		if debug && logger != nil {
+			logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+		}
+		llmReport := parseLLMResponse(llmResponse)
+		if llmReport.Score > 0 {
+			report.Score = llmReport.Score
+		}
+		report.Summary = llmReport.Summary
+		report.Issues = append(report.Issues, llmReport.Issues...)
+		report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
 	}
 
 	return report, nil
@@ -499,13 +511,10 @@ type ModuleAuditInput struct {
 }
 
 func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput) (*domain.AuditReport, error) {
+	if input.ProjectPath == "" {
+		return nil, fmt.Errorf("project_path is required")
+	}
 	projectPath := input.ProjectPath
-	if projectPath == "" {
-		projectPath = te.defaultPath
-	}
-	if projectPath == "" {
-		projectPath = "."
-	}
 
 	if err := validatePath(projectPath); err != nil {
 		return nil, err
@@ -548,6 +557,10 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 			logger.Printf("[WARN] prompt size %d chars may exceed model context window", len(prompt))
 		}
 
+		if debug {
+			savePrompt("module_audit", prompt, language, filepath.Join(projectPath, "debug"))
+		}
+
 		if debug && logger != nil {
 			logger.Printf(">>> LLM Request (%s): %s", llmProvider.Name(), prompt[:min(200, len(prompt))])
 		}
@@ -558,16 +571,21 @@ func (te *ToolExecutor) ModuleAudit(ctx context.Context, input ModuleAuditInput)
 		defer te.releaseLLM()
 
 		llmResponse, err := llmProvider.Complete(ctx, prompt, language)
-		if err == nil {
+		if err != nil {
 			if debug && logger != nil {
-				logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+				logger.Printf("<<< LLM Error: %v", err)
 			}
-			llmReport := parseLLMResponse(llmResponse)
-			report.Score = llmReport.Score
-			report.Summary = llmReport.Summary
-			report.Issues = append(report.Issues, llmReport.Issues...)
-			report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
+			return nil, fmt.Errorf("LLM call failed: %w", err)
 		}
+
+		if debug && logger != nil {
+			logger.Printf("<<< LLM Response (%s): %s", llmProvider.Name(), llmResponse[:min(200, len(llmResponse))])
+		}
+		llmReport := parseLLMResponse(llmResponse)
+		report.Score = llmReport.Score
+		report.Summary = llmReport.Summary
+		report.Issues = append(report.Issues, llmReport.Issues...)
+		report.Recommendations = append(report.Recommendations, llmReport.Recommendations...)
 	}
 
 	return report, nil

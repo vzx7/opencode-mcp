@@ -22,8 +22,6 @@ func main() {
 	llm := flag.String("llm", "", "Model name (overrides ENV)")
 	endpoint := flag.String("endpoint", "", "Endpoint (overrides ENV)")
 	port := flag.String("port", "", "Port (overrides ENV)")
-	project := flag.String("project", "", "Project path (overrides ENV)")
-	debugDir := flag.String("debug-dir", "", "Debug output directory (default: <project>/debug)")
 
 	flag.Parse()
 
@@ -46,9 +44,6 @@ func main() {
 	if flag.Lookup("port").Value.String() != "" {
 		cfg.Port = *port
 	}
-	if flag.Lookup("project").Value.String() != "" {
-		cfg.Project = *project
-	}
 
 	// Validate after CLI overrides
 	if err := cfg.Validate(); err != nil {
@@ -56,11 +51,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	dbgDir := *debugDir
-
 	mcpCfg := mcp.Config{
-		ProjectPath: cfg.Project,
-		DebugDir:    dbgDir,
 		Provider:  cfg.Provider,
 		LLM:      cfg.LLM,
 		OpenAIKey:  cfg.OpenAIKey,
@@ -83,7 +74,6 @@ func main() {
 		server.StartStdio()
 	} else {
 		fmt.Printf("AI Tech Lead MCP Server\n")
-		fmt.Printf("Project: %s\n", cfg.Project)
 		fmt.Printf("Provider: %s (%s)\n", cfg.Provider, cfg.LLM)
 		fmt.Printf("Port: %s\n", cfg.Port)
 		if debugMode {

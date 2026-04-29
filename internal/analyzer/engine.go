@@ -446,14 +446,19 @@ func (e *Engine) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.Pro
 		Recommendations: []string{},
 	}
 
-	layerPaths := make(map[string][]string)
-	for _, layer := range pm.Layers {
-		layerPaths[layer.Name] = layer.Paths
-	}
-
+	// Check layer existence by filesystem paths from LayerRule.Paths patterns.
+	layerExists := make(map[string]bool)
 	for _, rule := range rules.Layers {
-		currentPaths, ok := layerPaths[rule.Name]
-		if !ok {
+		exists := false
+		for _, pattern := range rule.Paths {
+			dir := filepath.Join(pm.Root, filepath.FromSlash(pattern))
+			if _, err := os.Stat(dir); err == nil {
+				exists = true
+				break
+			}
+		}
+		layerExists[rule.Name] = exists
+		if !exists {
 			report.Issues = append(report.Issues, domain.Issue{
 				Severity:   domain.SeverityMedium,
 				Message:    fmt.Sprintf("Expected layer '%s' not found", rule.Name),
@@ -461,25 +466,73 @@ func (e *Engine) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.Pro
 				Suggestion: fmt.Sprintf("Add layer for %s components", rule.Name),
 			})
 			report.Score -= scorePenaltyLayerMissing
+		}
+	}
+
+	// Build package-path → layer-name index using Paths as prefixes.
+	pkgLayer := buildPkgLayerIndex(rules)
+
+	// Build allow and forbidden sets for fast lookup.
+	allowSet := make(map[string]map[string]bool, len(rules.Layers))
+	for _, rule := range rules.Layers {
+		set := make(map[string]bool, len(rule.Allow))
+		for _, a := range rule.Allow {
+			set[a] = true
+		}
+		allowSet[rule.Name] = set
+	}
+	forbiddenSet := make(map[string]map[string]string) // from → to → reason
+	for _, dep := range rules.Dependencies {
+		if forbiddenSet[dep.From] == nil {
+			forbiddenSet[dep.From] = make(map[string]string)
+		}
+		forbiddenSet[dep.From][dep.To] = dep.Reason
+	}
+
+	// Check each import edge against allow_imports_from and forbidden_dependencies.
+	reported := make(map[string]bool)
+	for pkg, imports := range pm.Dependencies {
+		fromLayer := pkgLayer(pkg)
+		if fromLayer == "" {
 			continue
 		}
-
-		for _, allowed := range rule.Allow {
-			found := false
-			for _, path := range currentPaths {
-				if strings.Contains(path, allowed) {
-					found = true
-					break
+		for _, imp := range imports {
+			toLayer := pkgLayer(imp)
+			if toLayer == "" || toLayer == fromLayer {
+				continue
+			}
+			// forbidden_dependencies takes priority — report once per layer pair.
+			if reasons, isForbidden := forbiddenSet[fromLayer]; isForbidden {
+				if reason, bad := reasons[toLayer]; bad {
+					key := "forbidden:" + fromLayer + "→" + toLayer
+					if !reported[key] {
+						reported[key] = true
+						report.Issues = append(report.Issues, domain.Issue{
+							Severity:   domain.SeverityCritical,
+							Message:    fmt.Sprintf("Forbidden dependency: '%s' imports '%s'", fromLayer, toLayer),
+							Location:   pkg,
+							Suggestion: reason,
+						})
+						report.Score -= 20
+					}
+					continue
 				}
 			}
-			if !found {
-				report.Issues = append(report.Issues, domain.Issue{
-					Severity:   domain.SeverityLow,
-					Message:    fmt.Sprintf("Expected component '%s' in layer '%s'", allowed, rule.Name),
-					Location:   rule.Name,
-					Suggestion: fmt.Sprintf("Consider adding %s", allowed),
-				})
-				report.Score -= scorePenaltyComponentMissing
+			// allow_imports_from violation.
+			if allowed, ok := allowSet[fromLayer]; ok {
+				if !allowed[toLayer] {
+					key := "allow:" + fromLayer + "→" + toLayer
+					if !reported[key] {
+						reported[key] = true
+						report.Issues = append(report.Issues, domain.Issue{
+							Severity:   domain.SeverityHigh,
+							Message:    fmt.Sprintf("Layer '%s' imports '%s' which is not in allow_imports_from", fromLayer, toLayer),
+							Location:   pkg,
+							Suggestion: fmt.Sprintf("Remove dependency from '%s' to '%s'", fromLayer, toLayer),
+						})
+						report.Score -= 15
+					}
+				}
 			}
 		}
 	}
@@ -495,6 +548,34 @@ func (e *Engine) CheckCompliance(rules *domain.ArchitectureRules, pm *domain.Pro
 	}
 
 	return report
+}
+
+// buildPkgLayerIndex returns a function that maps a relative package path to
+// its layer name using the LayerRule.Paths patterns as prefixes.
+func buildPkgLayerIndex(rules *domain.ArchitectureRules) func(pkg string) string {
+	type entry struct {
+		prefix string
+		name   string
+	}
+	entries := make([]entry, 0)
+	for _, rule := range rules.Layers {
+		for _, pattern := range rule.Paths {
+			entries = append(entries, entry{filepath.ToSlash(pattern), rule.Name})
+		}
+	}
+	// Sort by prefix length descending so the most specific pattern wins.
+	sort.Slice(entries, func(i, j int) bool {
+		return len(entries[i].prefix) > len(entries[j].prefix)
+	})
+	return func(pkg string) string {
+		pkg = filepath.ToSlash(pkg)
+		for _, e := range entries {
+			if pkg == e.prefix || strings.HasPrefix(pkg, e.prefix+"/") {
+				return e.name
+			}
+		}
+		return ""
+	}
 }
 
 func (e *Engine) AuditModule(modulePath, projectRoot string) (*domain.AuditReport, error) {

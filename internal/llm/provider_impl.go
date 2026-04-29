@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -330,6 +331,19 @@ func (e *notImplementedError) Error() string {
 	return e.msg
 }
 
+// relPath returns path relative to root. Falls back to filepath.Base(path) if
+// the path cannot be made relative (e.g. different drives on Windows).
+func relPath(root, path string) string {
+	if root == "" || path == "" {
+		return path
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
 func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snapshotOrder []string, omitted []string, graph *ImportGraph, metrics []FileMetric, hotspots []GitHotspot, snippetLang string, language string) string {
 	var sb strings.Builder
 
@@ -355,7 +369,7 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snaps
 	sb.WriteString("\n")
 	sb.WriteString(p.SystemRole)
 	sb.WriteString("\n\n## " + p.Labels["root"] + " ")
-	sb.WriteString(projectMap.Root)
+	sb.WriteString(filepath.Base(projectMap.Root))
 	sb.WriteString("\n\n")
 	sb.WriteString(p.Labels["modules"])
 	sb.WriteString("\n")
@@ -363,7 +377,7 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snaps
 		sb.WriteString("- ")
 		sb.WriteString(m.Name)
 		sb.WriteString(": ")
-		sb.WriteString(m.Path)
+		sb.WriteString(relPath(projectMap.Root, m.Path))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n" + p.Labels["layers"] + "\n")
@@ -371,7 +385,11 @@ func BuildReviewPrompt(projectMap *ProjectMap, snapshot map[string]string, snaps
 		sb.WriteString("- ")
 		sb.WriteString(l.Name)
 		sb.WriteString(": ")
-		sb.WriteString(strings.Join(l.Paths, ", "))
+		relPaths := make([]string, len(l.Paths))
+		for i, p := range l.Paths {
+			relPaths[i] = relPath(projectMap.Root, p)
+		}
+		sb.WriteString(strings.Join(relPaths, ", "))
 		sb.WriteString("\n")
 	}
 
@@ -530,28 +548,67 @@ func BuildCompliancePrompt(
 		}
 	}
 
-	// Rules section
+	// Rules section — full content from .architecture.json
 	sb.WriteString("\n" + p.Labels["compliance_rules_section"] + "\n")
+	if rules.Description != "" {
+		sb.WriteString(rules.Description + "\n")
+	}
+	sb.WriteString("\n### Layers\n")
 	for _, layer := range rules.Layers {
-		sb.WriteString(p.Labels["compliance_layer_label"] + " ")
+		sb.WriteString(p.Labels["compliance_layer_label"] + " **")
 		sb.WriteString(layer.Name)
+		sb.WriteString("**")
+		if layer.Description != "" {
+			sb.WriteString(" — ")
+			sb.WriteString(layer.Description)
+		}
 		sb.WriteString("\n  " + p.Labels["paths"] + " ")
 		sb.WriteString(strings.Join(layer.Paths, ", "))
-		sb.WriteString("\n  " + p.Labels["allowed"] + " ")
-		sb.WriteString(strings.Join(layer.Allow, ", "))
+		if len(layer.Allow) > 0 {
+			sb.WriteString("\n  " + p.Labels["allowed"] + " ")
+			sb.WriteString(strings.Join(layer.Allow, ", "))
+		} else {
+			sb.WriteString("\n  " + p.Labels["allowed"] + " (none)")
+		}
 		sb.WriteString("\n")
+	}
+	if len(rules.Dependencies) > 0 {
+		sb.WriteString("\n### Forbidden Dependencies\n")
+		for _, dep := range rules.Dependencies {
+			sb.WriteString("- ")
+			sb.WriteString(dep.From)
+			sb.WriteString(" → ")
+			sb.WriteString(dep.To)
+			if dep.Reason != "" {
+				sb.WriteString(": ")
+				sb.WriteString(dep.Reason)
+			}
+			sb.WriteString("\n")
+		}
+	}
+	if len(rules.Constraints) > 0 {
+		sb.WriteString("\n### Architecture Constraints\n")
+		for _, c := range rules.Constraints {
+			sb.WriteString("- ")
+			sb.WriteString(c)
+			sb.WriteString("\n")
+		}
 	}
 
 	// Project structure
 	sb.WriteString("\n" + p.Labels["compliance_structure_section"] + "\n")
 	sb.WriteString(p.Labels["root"] + " ")
-	sb.WriteString(projectMap.Root)
+	sb.WriteString(filepath.Base(projectMap.Root))
 	sb.WriteString("\n\n" + p.Labels["layers"] + "\n")
 	for _, l := range projectMap.Layers {
 		sb.WriteString("- ")
 		sb.WriteString(l.Name)
 		sb.WriteString(": ")
-		sb.WriteString(strings.Join(l.Paths, ", "))
+		layerRelPaths := make([]string, len(l.Paths))
+		for i, lp := range l.Paths {
+			layerRelPaths[i] = relPath(projectMap.Root, lp)
+		}
+		sb.WriteString(strings.Join(layerRelPaths, ", "))
 		sb.WriteString("\n")
 	}
 

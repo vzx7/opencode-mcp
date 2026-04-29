@@ -28,8 +28,6 @@ func getProviderAPIKey(provider string, openAIKey, anthropicKey string) string {
 
 type Server struct {
 	executor    *tools.ToolExecutor
-	defaultPath string
-	debugDir    string
 	llm         llm.LLMProvider
 	logger      *log.Logger
 	language    string
@@ -37,8 +35,6 @@ type Server struct {
 }
 
 type Config struct {
-	ProjectPath string
-	DebugDir    string
 	Provider   string
 	LLM        string
 	OpenAIKey     string
@@ -67,37 +63,20 @@ func NewServer(cfg Config) *Server {
 	}
 
 	executor := tools.NewToolExecutor(tools.ToolExecutorConfig{
-		DefaultPath: cfg.ProjectPath,
-		LLM:        llmProvider,
-		Endpoint:   cfg.Endpoint,
-		Language:   cfg.Language,
-		Debug:     cfg.Debug,
+		LLM:      llmProvider,
+		Endpoint: cfg.Endpoint,
+		Language: cfg.Language,
+		Debug:   cfg.Debug,
 	})
 
-	debugDir := cfg.DebugDir
-	if debugDir == "" && cfg.ProjectPath != "" {
-		debugDir = filepath.Join(cfg.ProjectPath, "debug")
-	}
-	if debugDir != "" {
-		if err := os.MkdirAll(debugDir, 0755); err != nil {
-			logger.Printf("Warning: failed to create debug directory: %v", err)
-			debugDir = ""
-		} else {
-			logger.Printf("Debug dir: %s", debugDir)
-		}
-	}
-
-	logger.Printf("Project: %s", cfg.ProjectPath)
 	logger.Printf("LLM: %s (%s)", cfg.Provider, cfg.LLM)
 
 	return &Server{
-		executor:    executor,
-		defaultPath: cfg.ProjectPath,
-		debugDir:    debugDir,
-		llm:        llmProvider,
-		logger:     logger,
-		language:   cfg.Language,
-		debug:     cfg.Debug,
+		executor: executor,
+		llm:      llmProvider,
+		logger:   logger,
+		language: cfg.Language,
+		debug:   cfg.Debug,
 	}
 }
 
@@ -314,7 +293,6 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 
 	if s.debug {
 		s.logger.Printf(">>> Tool call: %s", toolName)
-		s.logger.Printf("    ProjectPath: %s", s.defaultPath)
 		if arguments != nil {
 			s.logger.Printf("    Arguments: %s", formatArgs(arguments))
 		}
@@ -325,7 +303,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 
 	switch toolName {
 	case "architecture_review":
-		input := tools.ArchitectureReviewInput{ToolInput: tools.ToolInput{ProjectPath: s.defaultPath}}
+		input := tools.ArchitectureReviewInput{ToolInput: tools.ToolInput{}}
 		input.Language = s.language
 
 		if arguments != nil {
@@ -357,10 +335,15 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 		if err != nil {
 			return JSONRPCError{Code: -32603, Message: err.Error()}
 		}
-		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.persistReport(toolName, report, input.ProjectPath, "")}}}
+
+		var debugDir string
+		if s.debug && input.ProjectPath != "" {
+			debugDir = filepath.Join(input.ProjectPath, "debug")
+		}
+		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.persistReport(toolName, report, input.ProjectPath, "", debugDir)}}}
 
 	case "architecture_compliance_check":
-		input := tools.ArchitectureComplianceInput{ToolInput: tools.ToolInput{ProjectPath: s.defaultPath}}
+		input := tools.ArchitectureComplianceInput{ToolInput: tools.ToolInput{}}
 		input.Language = s.language
 
 		if arguments != nil {
@@ -399,10 +382,15 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 		if err != nil {
 			return JSONRPCError{Code: -32603, Message: err.Error()}
 		}
-		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.persistReport(toolName, report, input.ProjectPath, "")}}}
+
+		var debugDir string
+		if s.debug && input.ProjectPath != "" {
+			debugDir = filepath.Join(input.ProjectPath, "debug")
+		}
+		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.persistReport(toolName, report, input.ProjectPath, "", debugDir)}}}
 
 	case "module_audit":
-		input := tools.ModuleAuditInput{ToolInput: tools.ToolInput{ProjectPath: s.defaultPath}}
+		input := tools.ModuleAuditInput{ToolInput: tools.ToolInput{}}
 		input.Language = s.language
 
 		if arguments != nil {
@@ -430,7 +418,12 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 		if err != nil {
 			return JSONRPCError{Code: -32603, Message: err.Error()}
 		}
-		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.persistReport(toolName, report, input.ProjectPath, input.ModulePath)}}}
+
+		var debugDir string
+		if s.debug && input.ProjectPath != "" {
+			debugDir = filepath.Join(input.ProjectPath, "debug")
+		}
+		return ToolCallResult{Content: []ContentBlock{{Type: "text", Text: s.persistReport(toolName, report, input.ProjectPath, input.ModulePath, debugDir)}}}
 
 	default:
 		execErr = fmt.Errorf("tool not found: %s", toolName)
@@ -443,20 +436,6 @@ func (s *Server) handleToolsCall(ctx context.Context, req JSONRPCRequest) interf
 	return result
 }
 
-func (s *Server) resolveDebugDir(projectPath string) string {
-	if s.debugDir != "" {
-		return s.debugDir
-	}
-	if projectPath != "" {
-		return filepath.Join(projectPath, "debug")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(cwd, "debug")
-}
-
 type reportEnvelope struct {
 	Tool       string              `json:"tool"`
 	Timestamp  string              `json:"timestamp"`
@@ -466,17 +445,14 @@ type reportEnvelope struct {
 }
 
 // persistReport saves the report as both .md and .json, returns the markdown string.
-func (s *Server) persistReport(toolName string, report *domain.AuditReport, projectPath, modulePath string) string {
+func (s *Server) persistReport(toolName string, report *domain.AuditReport, projectPath, modulePath, debugDir string) string {
 	mdContent := s.formatReport(report)
 
-	dir := s.resolveDebugDir(projectPath)
-	if dir == "" {
-		s.logger.Printf("[WARN] cannot resolve debug dir, skipping file save")
+	if debugDir == "" {
 		return mdContent
 	}
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		s.logger.Printf("[ERROR] failed to create debug dir %s: %v", dir, err)
+	if err := os.MkdirAll(debugDir, 0755); err != nil {
 		return mdContent
 	}
 
@@ -493,10 +469,10 @@ func (s *Server) persistReport(toolName string, report *domain.AuditReport, proj
 	}
 	mdHeader += "---\n\n"
 
-	if err := os.WriteFile(filepath.Join(dir, base+".md"), []byte(mdHeader+mdContent), 0644); err != nil {
-		s.logger.Printf("[ERROR] failed to write md: %v", err)
+	if err := os.WriteFile(filepath.Join(debugDir, base+".md"), []byte(mdHeader+mdContent), 0644); err != nil {
+		s.logger.Printf("[ERROR] failed to save md: %v", err)
 	} else {
-		s.logger.Printf("[OK] md saved: %s", filepath.Join(dir, base+".md"))
+		s.logger.Printf("[OK] md saved: %s", filepath.Join(debugDir, base+".md"))
 	}
 
 	envelope := reportEnvelope{
@@ -509,10 +485,12 @@ func (s *Server) persistReport(toolName string, report *domain.AuditReport, proj
 	jsonData, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {
 		s.logger.Printf("[ERROR] failed to marshal json: %v", err)
-	} else if err := os.WriteFile(filepath.Join(dir, base+".json"), jsonData, 0644); err != nil {
-		s.logger.Printf("[ERROR] failed to write json: %v", err)
+		return mdContent
+	}
+	if err := os.WriteFile(filepath.Join(debugDir, base+".json"), jsonData, 0644); err != nil {
+		s.logger.Printf("[ERROR] failed to save json: %v", err)
 	} else {
-		s.logger.Printf("[OK] json saved: %s", filepath.Join(dir, base+".json"))
+		s.logger.Printf("[OK] json saved: %s", filepath.Join(debugDir, base+".json"))
 	}
 
 	return mdContent
@@ -546,7 +524,8 @@ func (s *Server) formatReport(report *domain.AuditReport) string {
 			domain.SeverityLow,
 		}
 		for _, issue := range report.Issues {
-			bySeverity[issue.Severity] = append(bySeverity[issue.Severity], issue)
+			normalized := domain.Severity(strings.ToLower(string(issue.Severity)))
+			bySeverity[normalized] = append(bySeverity[normalized], issue)
 		}
 
 		b.WriteString(fmt.Sprintf("## Issues (%d)\n\n", len(report.Issues)))

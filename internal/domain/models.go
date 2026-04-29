@@ -24,6 +24,7 @@ type AuditReport struct {
 }
 
 type ArchitectureRules struct {
+	Description  string           `json:"description,omitempty"`
 	Layers       []LayerRule      `json:"layers"`
 	Dependencies []DependencyRule `json:"forbidden_dependencies"`
 	Constraints  []string         `json:"constraints"`
