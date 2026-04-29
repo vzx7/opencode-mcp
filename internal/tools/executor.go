@@ -423,16 +423,18 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 
 	rules := input.TargetArchitecture
 	if rules == nil {
-		rules = te.getDefaultRules()
+		docsDir := input.Docs
+		if docsDir == "" {
+			docsDir = "docs/arch"
+		}
+		if loaded, ok := loadRulesFromDir(docsDir, projectPath); ok {
+			rules = loaded
+		} else {
+			rules = te.getDefaultRules()
+		}
 	}
 
 	report := analyzerEngine.CheckCompliance(rules, pm)
-
-	var docsContent map[string]string
-	var docsOrder []string
-	if input.Docs != "" {
-		docsContent, docsOrder, _ = te.readDocsContent(input.Docs, projectPath)
-	}
 
 	snapshot, snapshotOrder, snapshotOmitted := te.buildCodeSnapshot(projectPath, input.IncludePaths, 60_000, analyzerEngine)
 
@@ -442,7 +444,7 @@ func (te *ToolExecutor) ArchitectureComplianceCheck(ctx context.Context, input A
 	}
 	language := te.getLanguage(input.Language)
 	if llmProvider != nil {
-		prompt := llm.BuildCompliancePrompt(rules, pm, graph, docsContent, docsOrder, snapshot, snapshotOrder, snapshotOmitted, analyzerEngine.SnippetLang(), language)
+		prompt := llm.BuildCompliancePrompt(rules, pm, graph, nil, nil, snapshot, snapshotOrder, snapshotOmitted, analyzerEngine.SnippetLang(), language)
 
 		te.mu.RLock()
 		debug := te.debug
@@ -621,60 +623,24 @@ func (te *ToolExecutor) readModuleContent(modulePath, projectRoot string, engine
 	return content, nil
 }
 
-func (te *ToolExecutor) readDocsContent(docsPath, projectRoot string) (map[string]string, []string, error) {
-	content := make(map[string]string)
-	var order []string
-
-	absDocsPath := docsPath
-	if !filepath.IsAbs(docsPath) {
-		absDocsPath = filepath.Join(projectRoot, docsPath)
+func loadRulesFromDir(docsDir, projectRoot string) (*domain.ArchitectureRules, bool) {
+	absDir := docsDir
+	if !filepath.IsAbs(docsDir) {
+		absDir = filepath.Join(projectRoot, docsDir)
 	}
-	absDocsPath, _ = filepath.Abs(absDocsPath)
+	absDir, _ = filepath.Abs(absDir)
 
-	info, err := os.Stat(absDocsPath)
+	rulesPath := filepath.Join(absDir, ".architecture.json")
+	data, err := os.ReadFile(rulesPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("docs path not found: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, nil, fmt.Errorf("docs path must be a directory: %s", docsPath)
+		return nil, false
 	}
 
-	const maxDocsChars = 80_000
-	docExts := map[string]bool{
-		".md": true, ".txt": true, ".adoc": true, ".rst": true,
+	var rules domain.ArchitectureRules
+	if err := json.Unmarshal(data, &rules); err != nil {
+		return nil, false
 	}
-	totalChars := 0
-
-	_ = filepath.Walk(absDocsPath, func(path string, fi fs.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if fi.IsDir() {
-			if strings.HasPrefix(fi.Name(), ".") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !docExts[strings.ToLower(filepath.Ext(path))] {
-			return nil
-		}
-		if isSensitiveFile(path) {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil || totalChars+len(data) > maxDocsChars {
-			return nil
-		}
-		relPath, _ := filepath.Rel(projectRoot, path)
-		relPath = filepath.ToSlash(relPath)
-		content[relPath] = string(data)
-		order = append(order, relPath)
-		totalChars += len(data)
-		return nil
-	})
-
-	sort.Strings(order)
-	return content, order, nil
+	return &rules, true
 }
 
 type fileSize struct {

@@ -124,7 +124,7 @@ MCP Client
       → engine.BuildProjectMap
       → engine.BuildImportGraph
       → rules = input.TargetArchitecture
-             ?? load from .architecture.json in project root
+             ?? load from docs/arch/.architecture.json (auto-discovery)
              ?? getDefaultRules()
       → engine.CheckCompliance(rules, pm)
           — проверяет наличие слоёв

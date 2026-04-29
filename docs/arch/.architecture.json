@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "description": "Layered Go MCP server. Dependency direction: cmd → mcp → tools → {analyzer,llm} → domain. No upward dependencies.",
+  "layers": [
+    {
+      "name": "domain",
+      "description": "Pure data types. No internal imports allowed.",
+      "patterns": ["internal/domain"],
+      "allow_imports_from": []
+    },
+    {
+      "name": "analyzer",
+      "description": "Static project analysis. Depends only on domain.",
+      "patterns": ["internal/analyzer"],
+      "allow_imports_from": ["domain"]
+    },
+    {
+      "name": "llm",
+      "description": "LLM provider abstraction and prompt building. Depends only on domain.",
+      "patterns": ["internal/llm"],
+      "allow_imports_from": ["domain"]
+    },
+    {
+      "name": "config",
+      "description": "Configuration loading. No internal deps.",
+      "patterns": ["internal/config"],
+      "allow_imports_from": []
+    },
+    {
+      "name": "tools",
+      "description": "Tool execution orchestration. Depends on analyzer, llm, domain.",
+      "patterns": ["internal/tools"],
+      "allow_imports_from": ["domain", "analyzer", "llm"]
+    },
+    {
+      "name": "mcp",
+      "description": "MCP transport layer. Depends on tools, llm, domain.",
+      "patterns": ["internal/mcp"],
+      "allow_imports_from": ["domain", "llm", "tools"]
+    },
+    {
+      "name": "cmd",
+      "description": "Entry point. May depend on all internal packages.",
+      "patterns": ["cmd"],
+      "allow_imports_from": ["domain", "config", "llm", "analyzer", "tools", "mcp"]
+    }
+  ],
+  "forbidden_dependencies": [
+    {
+      "from": "domain",
+      "to": "analyzer",
+      "reason": "domain is the lowest layer — must have zero internal imports"
+    },
+    {
+      "from": "domain",
+      "to": "llm",
+      "reason": "domain is the lowest layer — must have zero internal imports"
+    },
+    {
+      "from": "domain",
+      "to": "tools",
+      "reason": "domain is the lowest layer — must have zero internal imports"
+    },
+    {
+      "from": "domain",
+      "to": "mcp",
+      "reason": "domain is the lowest layer — must have zero internal imports"
+    },
+    {
+      "from": "analyzer",
+      "to": "llm",
+      "reason": "analyzer and llm are sibling layers — cross-dependency would create coupling"
+    },
+    {
+      "from": "llm",
+      "to": "analyzer",
+      "reason": "analyzer and llm are sibling layers — cross-dependency would create coupling"
+    },
+    {
+      "from": "llm",
+      "to": "tools",
+      "reason": "llm must not know about orchestration logic"
+    },
+    {
+      "from": "analyzer",
+      "to": "tools",
+      "reason": "analyzer must not know about orchestration logic"
+    },
+    {
+      "from": "tools",
+      "to": "mcp",
+      "reason": "tools must not depend on transport layer"
+    }
+  ],
+  "constraints": [
+    "All exported types shared between packages must be defined in internal/domain",
+    "LLMProvider interface must remain the only interface in the system",
+    "No package-level mutable state (global vars) except promptsByLang in internal/llm (loaded once at init)",
+    "No init() side effects except prompt file loading in internal/llm/loader.go",
+    "All LLM calls must go through ToolExecutor.acquireLLM semaphore",
+    "Score in AuditReport must be set only by LLM response — engine enrichment must not modify Score"
+  ]
+}

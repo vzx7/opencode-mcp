@@ -126,8 +126,8 @@ func TestArchitectureRules(t *testing.T) {
 			{Name: "internal", Paths: []string{"internal"}, Allow: []string{"api", "service"}},
 		},
 		Dependencies: []DependencyRule{
-			{From: "cmd", To: "internal", Violation: false},
-			{From: "internal", To: "cmd", Violation: true},
+			{From: "cmd", To: "internal"},
+			{From: "internal", To: "cmd", Reason: "upward dependency forbidden"},
 		},
 		Constraints: []string{"no cyclic dependencies"},
 	}
@@ -148,7 +148,7 @@ func TestArchitectureRules(t *testing.T) {
 	if len(parsed.Dependencies) != 2 {
 		t.Errorf("Dependencies len = %d, want %d", len(parsed.Dependencies), 2)
 	}
-	if parsed.Dependencies[1].Violation != true {
-		t.Errorf("Dependencies[1].Violation = %v, want true", parsed.Dependencies[1].Violation)
+	if parsed.Dependencies[1].Reason == "" {
+		t.Errorf("Dependencies[1].Reason is empty, want non-empty")
 	}
 }

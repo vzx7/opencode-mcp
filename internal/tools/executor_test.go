@@ -419,6 +419,300 @@ func TestBuildCodeSnapshot(t *testing.T) {
 	})
 }
 
+func TestIsSensitiveFile(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// .env variants
+		{".env", true},
+		{".env.local", true},
+		{".env.production", true},
+		{"config.env", true},
+		// crypto keys
+		{"server.key", true},
+		{"cert.pem", true},
+		{"keystore.jks", true},
+		{"bundle.p12", true},
+		// SSH keys
+		{"id_rsa", true},
+		{"id_ed25519", true},
+		{"id_rsa.pub", true},
+		// sensitive name patterns
+		{"credentials.go", true},
+		{"secrets.py", true},
+		{"password_manager.ts", true},
+		{"api_key.go", true},
+		{"auth_token.go", true},
+		// normal source files
+		{"main.go", false},
+		{"config.go", false},
+		{"server.ts", false},
+		{"models.py", false},
+		{"settings.go", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := isSensitiveFile(tt.path)
+			if got != tt.want {
+				t.Errorf("isSensitiveFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCodeSnapshotExcludesSensitiveFiles(t *testing.T) {
+	mockLLM := &mockProvider{name: "mock"}
+	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
+
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "credentials.go"), []byte("package main\nconst pass = \"secret\""), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "secrets.go"), []byte("package main\nconst token = \"abc\""), 0644)
+
+	eng := analyzer.New(tmpDir)
+	snapshot, _, _ := te.buildCodeSnapshot(tmpDir, nil, 50000, eng)
+
+	if _, ok := snapshot["main.go"]; !ok {
+		t.Error("expected main.go in snapshot")
+	}
+	if _, ok := snapshot["credentials.go"]; ok {
+		t.Error("credentials.go must be excluded from snapshot")
+	}
+	if _, ok := snapshot["secrets.go"]; ok {
+		t.Error("secrets.go must be excluded from snapshot")
+	}
+}
+
+func TestBuildCodeSnapshotExcludesSensitiveViaIncludePaths(t *testing.T) {
+	mockLLM := &mockProvider{name: "mock"}
+	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
+
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "password.go"), []byte("package main"), 0644)
+
+	eng := analyzer.New(tmpDir)
+	includePaths := []string{
+		filepath.Join(tmpDir, "main.go"),
+		filepath.Join(tmpDir, "password.go"),
+	}
+	snapshot, _, _ := te.buildCodeSnapshot(tmpDir, includePaths, 50000, eng)
+
+	if _, ok := snapshot["main.go"]; !ok {
+		t.Error("expected main.go in snapshot")
+	}
+	if _, ok := snapshot["password.go"]; ok {
+		t.Error("password.go must be excluded even when explicitly in include_paths")
+	}
+}
+
+func TestLoadRulesFromDir(t *testing.T) {
+	validJSON := `{
+		"layers": [
+			{"name": "domain", "patterns": ["internal/domain"], "allow_imports_from": []},
+			{"name": "cmd", "patterns": ["cmd"], "allow_imports_from": ["domain"]}
+		],
+		"forbidden_dependencies": [
+			{"from": "domain", "to": "cmd", "reason": "no upward deps"}
+		],
+		"constraints": ["no global state"]
+	}`
+
+	t.Run("loads valid .architecture.json", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, ".architecture.json"), []byte(validJSON), 0644)
+
+		rules, ok := loadRulesFromDir(tmpDir, tmpDir)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if len(rules.Layers) != 2 {
+			t.Errorf("expected 2 layers, got %d", len(rules.Layers))
+		}
+		if rules.Layers[0].Name != "domain" {
+			t.Errorf("expected first layer 'domain', got %q", rules.Layers[0].Name)
+		}
+		if len(rules.Dependencies) != 1 {
+			t.Errorf("expected 1 forbidden dependency, got %d", len(rules.Dependencies))
+		}
+		if rules.Dependencies[0].Reason != "no upward deps" {
+			t.Errorf("expected reason field, got %q", rules.Dependencies[0].Reason)
+		}
+		if len(rules.Constraints) != 1 {
+			t.Errorf("expected 1 constraint, got %d", len(rules.Constraints))
+		}
+	})
+
+	t.Run("returns false when dir does not exist", func(t *testing.T) {
+		_, ok := loadRulesFromDir("/nonexistent/dir", "/nonexistent")
+		if ok {
+			t.Error("expected ok=false for non-existent dir")
+		}
+	})
+
+	t.Run("returns false when .architecture.json absent", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "overview.md"), []byte("# docs"), 0644)
+
+		_, ok := loadRulesFromDir(tmpDir, tmpDir)
+		if ok {
+			t.Error("expected ok=false when .architecture.json is absent")
+		}
+	})
+
+	t.Run("returns false for invalid JSON", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, ".architecture.json"), []byte("{invalid}"), 0644)
+
+		_, ok := loadRulesFromDir(tmpDir, tmpDir)
+		if ok {
+			t.Error("expected ok=false for invalid JSON")
+		}
+	})
+
+	t.Run("resolves relative path against projectRoot", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		archDir := filepath.Join(tmpDir, "arch")
+		os.MkdirAll(archDir, 0755)
+		os.WriteFile(filepath.Join(archDir, ".architecture.json"), []byte(validJSON), 0644)
+
+		rules, ok := loadRulesFromDir("arch", tmpDir)
+		if !ok {
+			t.Fatal("expected ok=true for relative path")
+		}
+		if len(rules.Layers) != 2 {
+			t.Errorf("expected 2 layers, got %d", len(rules.Layers))
+		}
+	})
+}
+
+func TestArchitectureComplianceCheckWithDocs(t *testing.T) {
+	mockLLM := &mockProvider{name: "mock"}
+	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})
+
+	t.Run("runs without docs", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+
+		input := ArchitectureComplianceInput{
+			ToolInput: ToolInput{ProjectPath: tmpDir},
+		}
+		report, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Error("expected non-nil report")
+		}
+	})
+
+	t.Run("loads rules from explicit docs dir", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		docsDir := filepath.Join(tmpDir, "docs", "arch")
+		os.MkdirAll(docsDir, 0755)
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+		rulesJSON := `{"layers":[{"name":"cmd","patterns":["cmd"],"allow_imports_from":[]}],"forbidden_dependencies":[],"constraints":[]}`
+		os.WriteFile(filepath.Join(docsDir, ".architecture.json"), []byte(rulesJSON), 0644)
+
+		input := ArchitectureComplianceInput{
+			ToolInput: ToolInput{ProjectPath: tmpDir},
+			Docs:      "docs/arch",
+		}
+		report, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Error("expected non-nil report")
+		}
+	})
+
+	t.Run("autodiscovers docs/arch/.architecture.json when docs not set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		docsDir := filepath.Join(tmpDir, "docs", "arch")
+		os.MkdirAll(docsDir, 0755)
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+		rulesJSON := `{"layers":[{"name":"cmd","patterns":["cmd"],"allow_imports_from":[]}],"forbidden_dependencies":[],"constraints":[]}`
+		os.WriteFile(filepath.Join(docsDir, ".architecture.json"), []byte(rulesJSON), 0644)
+
+		input := ArchitectureComplianceInput{
+			ToolInput: ToolInput{ProjectPath: tmpDir},
+			// Docs intentionally omitted — should autodiscover docs/arch
+		}
+		report, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Error("expected non-nil report")
+		}
+	})
+
+	t.Run("falls back to defaults when .architecture.json absent", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+
+		input := ArchitectureComplianceInput{
+			ToolInput: ToolInput{ProjectPath: tmpDir},
+		}
+		report, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Error("expected non-nil report even without .architecture.json")
+		}
+	})
+
+	t.Run("runs with include_paths", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, "server.go"), []byte("package main"), 0644)
+
+		input := ArchitectureComplianceInput{
+			ToolInput:    ToolInput{ProjectPath: tmpDir},
+			IncludePaths: []string{"main.go"},
+		}
+		report, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Error("expected non-nil report")
+		}
+	})
+
+	t.Run("invalid docs path does not fail the check", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0644)
+
+		input := ArchitectureComplianceInput{
+			ToolInput: ToolInput{ProjectPath: tmpDir},
+			Docs:      "nonexistent_docs_dir",
+		}
+		// missing .architecture.json is silently ignored — compliance check falls back to defaults
+		report, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if report == nil {
+			t.Error("expected non-nil report even with bad docs path")
+		}
+	})
+
+	t.Run("rejects path traversal", func(t *testing.T) {
+		input := ArchitectureComplianceInput{
+			ToolInput: ToolInput{ProjectPath: "../../../etc"},
+		}
+		_, err := te.ArchitectureComplianceCheck(context.Background(), input)
+		if err == nil {
+			t.Error("expected error for path traversal")
+		}
+	})
+}
+
 func TestEnrichWithGraphAnalysis(t *testing.T) {
 	mockLLM := &mockProvider{name: "mock"}
 	te := NewToolExecutor(ToolExecutorConfig{LLM: mockLLM})

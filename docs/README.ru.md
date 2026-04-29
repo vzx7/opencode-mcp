@@ -1,6 +1,6 @@
 # AI Tech Lead MCP Server
 
-MCP сервер для AI-ассистента, предоставляющий инструменты архитектурного аудита и ревью кода.
+MCP сервер для AI-ассистентов, предоставляющий инструменты архитектурного аудита и ревью кода. Поддерживает Go, TypeScript, Python, Rust и Java проекты.
 
 ## Возможности
 
@@ -8,8 +8,8 @@ MCP сервер для AI-ассистента, предоставляющий 
 
 | Tool | Описание |
 |------|----------|
-| `architecture_review` | Архитектурный аудит проекта целиком |
-| `architecture_compliance_check` | Проверка соответствия заданной архитектуре |
+| `architecture_review` | Полный архитектурный аудит проекта со снапшотом ключевых файлов |
+| `architecture_compliance_check` | Проверка соответствия правилам архитектуры и документации |
 | `module_audit` | Аудит отдельного файла или модуля |
 
 ---
@@ -19,28 +19,29 @@ MCP сервер для AI-ассистента, предоставляющий 
 Создайте файл `.env` в корне проекта:
 
 ```bash
-# Копируйте из .env.example
 cp .env.example .env
 ```
 
 ### Параметры .env
 
-| Переменная | Описание                                                 | По умолчанию       |
-| ------------| ----------------------------------------------------------| --------------------|
-| `PROVIDER` | LLM провайдер (`mock`, `openai`, или OpenAI-совместимый) | `mock`             |
-| `LLM`      | Модель                                                   | `gpt-4o`           |
-| `API_KEY`  | API ключ                                                 | -                  |
-| `ENDPOINT` | Кастомный endpoint                                       | -                  |
-| `PROJECT`  | Путь к проекту                                           | текущая директория |
-| `PORT`     | Порт                                                     | `8080`             |
-| `LANGUAGE` | Язык ответов (`ru`, `en`, `zh`)                          | `ru`               |
+| Переменная           | Описание                                              | По умолчанию       |
+|----------------------|-------------------------------------------------------|--------------------|
+| `PROVIDER`           | LLM провайдер (`mock`, `openai`, `anthropic`)         | `mock`             |
+| `LLM`                | Название модели                                       | `gpt-4o`           |
+| `OPENAI_API_KEY`     | API ключ OpenAI                                       | —                  |
+| `ANTHROPIC_API_KEY`  | API ключ Anthropic                                    | —                  |
+| `ENDPOINT`           | Кастомный endpoint (для OpenAI-совместимых API)       | —                  |
+| `PROJECT`            | Путь к проекту по умолчанию                           | текущая директория |
+| `PORT`               | Порт HTTP сервера                                     | `8080`             |
+| `LANGUAGE`           | Язык ответов (`ru`, `en`, `zh`)                       | `ru`               |
+
+> **Примечание:** таймаут HTTP-запросов к LLM — 10 минут.
 
 ### Примеры .env
 
-**Mock (без LLM):**
+**Mock (без LLM, для тестирования):**
 ```env
 PROVIDER=mock
-LLM=
 PORT=8080
 ```
 
@@ -48,14 +49,14 @@ PORT=8080
 ```env
 PROVIDER=openai
 LLM=gpt-4o
-API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 ```
 
-**Anthropic** *(не реализован — используется mock)*:
+**Anthropic:**
 ```env
 PROVIDER=anthropic
 LLM=claude-3-5-sonnet-20241022
-API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ### CLI флаги
@@ -63,16 +64,17 @@ API_KEY=sk-ant-...
 Все флаги переопределяют соответствующие значения из `.env`:
 
 ```
--stdio         Запуск в stdio режиме для MCP клиентов (Claude Desktop, Cursor и др.)
--provider      LLM провайдер (переопределяет PROVIDER)
--llm           Модель (переопределяет LLM)
--api-key       API ключ (переопределяет API_KEY)
--endpoint      Кастомный endpoint (переопределяет ENDPOINT)
--port          Порт (переопределяет PORT)
--project       Путь к проекту (переопределяет PROJECT)
--debug-dir     Директория для отчётов (по умолчанию: <project>/debug)
--debug         Подробное логирование
+-stdio       Запуск в stdio режиме для MCP клиентов (Claude Desktop, Cursor и др.)
+-provider    LLM провайдер (переопределяет PROVIDER)
+-llm         Модель (переопределяет LLM)
+-endpoint    Кастомный endpoint (переопределяет ENDPOINT)
+-port        Порт (переопределяет PORT)
+-project     Путь к проекту (переопределяет PROJECT)
+-debug-dir   Директория для отчётов (по умолчанию: <project>/debug)
+-debug       Подробное логирование
 ```
+
+> **Безопасность:** храните API ключи в `.env` — файл добавлен в `.gitignore`.
 
 **Примеры:**
 ```bash
@@ -80,7 +82,7 @@ API_KEY=sk-ant-...
 go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
 
 # stdio режим для MCP клиентов
-go run ./cmd -stdio -provider openai -llm gpt-4o -project /path/to/project
+go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022 -project /path/to/project
 
 # Своя директория для отчётов
 go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
@@ -88,13 +90,11 @@ go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
 
 ### Debug режим
 
-Запустите с флагом `-debug` для подробного логирования запросов к LLM, ответов и сохранения файлов:
-
 ```bash
 go run ./cmd -debug -project /path/to/project
 ```
 
-По умолчанию отчёты сохраняются в `<project>/debug/` в виде файлов `.md` и `.json`.
+Отчёты сохраняются в `<project>/debug/` в виде `.md` и `.json` файлов при каждом вызове tool.
 
 ---
 
@@ -110,27 +110,27 @@ go run ./cmd
 
 ### 2. Подключение к opencode
 
-Добавьте конфигурацию в `~/.opencode/mcp.json` (сервер загрузит настройки из `.env`):
+Добавьте в `~/.opencode/mcp.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "mcp_custom": {
+    "mcp_project_audit": {
       "type": "remote",
-      "url": "localhost:8080",
+      "url": "http://localhost:8080",
       "enabled": true
     }
   }
 }
 ```
 
-После перезапуска opencode доступны команды:
+После перезапуска opencode доступны скилл-команды:
 
 ```
-/architecture-review project_path=/path/to/project
-/architecture-compliance-check project_path=/path/to/project
-/module-audit module_path=/path/to/module
+/architecture_review
+/architecture_compliance_check
+/module_audit
 ```
 
 ---
@@ -139,13 +139,18 @@ go run ./cmd
 
 ### architecture_review
 
-Анализирует проект как систему, выявляет архитектурные проблемы.
+Анализирует проект как систему: слои, граф импортов, метрики файлов, git hotspots. Принимает список ключевых файлов через `include_paths`, чтобы сфокусировать LLM на архитектурно значимых частях.
 
 **Параметры:**
-- `project_path` (string, опционально) - путь к проекту
-- `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
-- `llm` (string, опционально) - модель (например `gpt-4o`)
-- `language` (string, опционально) - язык ответа (`ru`, `en`, `zh`)
+
+| Параметр               | Тип      | Описание |
+|------------------------|----------|----------|
+| `project_path`         | string   | Путь к проекту (опционально) |
+| `provider`             | string   | LLM провайдер: `mock`, `openai`, `anthropic` |
+| `llm`                  | string   | Модель (например, `gpt-4o`, `claude-3-5-sonnet-20241022`) |
+| `language`             | string   | Язык ответа: `ru`, `en`, `zh` |
+| `programming_language` | string   | Язык проекта: `go`, `python`, `typescript`, `rust`, `java`. Определяется автоматически. |
+| `include_paths`        | string[] | Относительные пути к ключевым файлам для снапшота. Если не указан — автодискавери по размеру. |
 
 **Пример вызова:**
 ```json
@@ -159,25 +164,26 @@ go run ./cmd
       "project_path": "/path/to/my-project",
       "provider": "openai",
       "llm": "gpt-4o",
-      "language": "en"
+      "language": "ru",
+      "programming_language": "go",
+      "include_paths": [
+        "cmd/main.go",
+        "internal/domain/models.go",
+        "internal/mcp/server.go"
+      ]
     }
   }
 }
 ```
 
-**Из opencode:**
-```
-/architecture-review project_path=/path/to/project provider=openai llm=gpt-4o
-```
-
-**Ответ:** инструмент возвращает отчёт в формате Markdown в виде MCP content text. В директорию debug также сохраняются два файла:
+**Ответ:** отчёт в формате Markdown в виде MCP content text. В директорию debug сохраняются два файла:
 - `architecture_review_<timestamp>.md` — читаемый отчёт
-- `architecture_review_<timestamp>.json` — структурированный отчёт для AI-агентов:
+- `architecture_review_<timestamp>.json` — структурированный отчёт:
 
 ```json
 {
   "tool": "architecture_review",
-  "timestamp": "2026-04-26T22:42:57+03:00",
+  "timestamp": "2026-04-28T12:00:00+03:00",
   "project": "/path/to/project",
   "report": {
     "score": 85,
@@ -195,38 +201,48 @@ go run ./cmd
 }
 ```
 
+---
+
 ### architecture_compliance_check
 
-Проверяет проект на соответствие заданной архитектуре.
+Проверяет проект на соответствие заданным правилам архитектуры. Опционально принимает директорию с архитектурной документацией (ADR, спецификации) как эталон для LLM.
 
 **Параметры:**
-- `project_path` (string, опционально) - путь к проекту
-- `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
-- `llm` (string, опционально) - модель
-- `target_architecture` (object, опционально) - правила архитектуры
-- `language` (string, опционально) - язык ответа (`ru`, `en`, `zh`)
 
-**target_architecture формат:**
+| Параметр               | Тип      | Описание |
+|------------------------|----------|----------|
+| `project_path`         | string   | Путь к проекту |
+| `provider`             | string   | LLM провайдер |
+| `llm`                  | string   | Модель |
+| `language`             | string   | Язык ответа: `ru`, `en`, `zh` |
+| `programming_language` | string   | Язык проекта. Определяется автоматически. |
+| `target_architecture`  | object   | Правила архитектуры (слои, допустимые импорты) |
+| `docs`                 | string   | Относительный путь к директории с `.architecture.json` (например, `docs/arch`). Если не передан, ищется автоматически в `docs/arch`. |
+| `include_paths`        | string[] | Относительные пути к ключевым файлам для снапшота. |
+
+**Формат `target_architecture`** (он же формат файла `.architecture.json`):
 ```json
 {
   "layers": [
     {
       "name": "cmd",
-      "paths": ["cmd"],
-      "allow": ["main"]
+      "patterns": ["cmd"],
+      "allow_imports_from": ["domain", "mcp", "config"]
     },
     {
-      "name": "internal",
-      "paths": ["internal"],
-      "allow": ["api", "domain", "service", "repository"]
+      "name": "domain",
+      "patterns": ["internal/domain"],
+      "allow_imports_from": []
     }
   ],
-  "dependencies": [
-    {"from": "internal", "to": "external", "violation": false}
+  "forbidden_dependencies": [
+    {"from": "domain", "to": "cmd", "reason": "no upward deps"}
   ],
-  "constraints": []
+  "constraints": ["Все общие типы должны быть в internal/domain"]
 }
 ```
+
+Поместите `.architecture.json` в `docs/arch/` — он будет загружен автоматически без передачи параметра `docs`.
 
 **Пример вызова:**
 ```json
@@ -239,35 +255,34 @@ go run ./cmd
     "arguments": {
       "project_path": "/path/to/project",
       "provider": "anthropic",
-      "llm": "claude-3-5-sonnet-20241022",
-      "target_architecture": {
-        "layers": [
-          {"name": "cmd", "paths": ["cmd"], "allow": []},
-          {"name": "internal", "paths": ["internal"], "allow": ["domain", "service"]}
-        ]
-      }
+      "llm": "claude-sonnet-4-6",
+      "include_paths": [
+        "internal/domain/models.go",
+        "internal/mcp/server.go"
+      ]
     }
   }
 }
 ```
 
-**Из opencode:**
-```
-/architecture-compliance-check project_path=/path/to/project provider=anthropic llm=claude-3-5-sonnet-20241022
-```
+---
 
 ### module_audit
 
-Аудитирует отдельный файл или модуль.
+Аудитирует отдельный файл или директорию: корректность, качество дизайна, coupling, cohesion, потенциальные баги, сложность.
 
 **Параметры:**
-- `module_path` (string, опционально) - путь к файлу или модулю
-- `project_path` (string, опционально) - путь к корню проекта
-- `provider` (string, опционально) - LLM провайдер (`mock`, `openai`, или OpenAI-совместимый)
-- `llm` (string, опционально) - модель
-- `language` (string, опционально) - язык ответа (`ru`, `en`, `zh`)
 
-**При��ер вызова:**
+| Параметр               | Тип    | Описание |
+|------------------------|--------|----------|
+| `module_path`          | string | Путь к файлу или директории |
+| `project_path`         | string | Путь к корню проекта |
+| `provider`             | string | LLM провайдер |
+| `llm`                  | string | Модель |
+| `language`             | string | Язык ответа: `ru`, `en`, `zh` |
+| `programming_language` | string | Язык проекта. Определяется автоматически. |
+
+**Пример вызова:**
 ```json
 {
   "jsonrpc": "2.0",
@@ -277,31 +292,23 @@ go run ./cmd
     "name": "module_audit",
     "arguments": {
       "module_path": "/path/to/project/internal/service",
+      "project_path": "/path/to/project",
       "provider": "openai",
-      "llm": "gpt-4o-mini"
+      "llm": "gpt-4o-mini",
+      "programming_language": "go"
     }
   }
 }
 ```
 
-**Из opencode:**
-```
-/module-audit module_path=/path/to/project/internal/service provider=openai llm=gpt-4o-mini
-```
+---
 
 ### Приоритет выбора провайдера и модели
 
-1. **Аргументы при вызове tool** (самый высокий приоритет):
-   - `provider=openai llm=gpt-4o` — динамически для каждого вызова
-
-2. **CLI флаги при запуске сервера**:
-   - `-provider=... -llm=...` — переопределяют `.env`
-
-3. **`.env` файл**:
-   - `PROVIDER=...`, `LLM=...` — default для всех вызовов
-
-4. **Hardcoded defaults** (самый низкий приоритет):
-   - Provider: `mock`, Model: `gpt-4o`
+1. **Аргументы при вызове tool** — `provider` / `llm` (наивысший приоритет)
+2. **CLI флаги при запуске** — `-provider` / `-llm`
+3. **`.env` файл** — `PROVIDER` / `LLM`
+4. **Hardcoded defaults** — провайдер: `mock`, модель: `gpt-4o`
 
 ---
 
@@ -309,28 +316,36 @@ go run ./cmd
 
 ```
 cmd/
-  main.go              # Точка входа
+  main.go                    # Точка входа, CLI флаги
 
 internal/
   config/
-    config.go        # Загрузка .env
+    config.go                # Загрузка и валидация .env
 
   mcp/
-    server.go       # MCP сервер (JSON-RPC)
+    server.go                # MCP сервер (JSON-RPC 2.0, HTTP + stdio)
 
   tools/
-    executor.go    # Логика выполнения tools
+    executor.go              # Выполнение tools, построение промптов, сохранение отчётов
 
   analyzer/
-    engine.go      # Анализ проекта и модулей
+    engine.go                # Языконезависимый оркестратор анализа
+    language.go              # Интерфейс ProjectAnalyzer
+    registry.go              # Автодетекция (go.mod, tsconfig.json, pyproject.toml, ...)
+    golang/
+      analyzer.go            # Go: граф импортов через go/ast, go.mod, _test.go
+    python/
+      analyzer.go            # Python: детекция языка, пустой граф (stub)
+    typescript/
+      analyzer.go            # TypeScript: детекция языка, пустой граф (stub)
 
   llm/
-    provider.go      # Интерфейс LLM провайдера
-    provider_impl.go  # Реализации провайдеров
-    types.go         # Type aliases
+    provider.go              # Интерфейс LLMProvider
+    provider_impl.go         # Реализации OpenAI, Anthropic, Mock + построители промптов
+    types.go                 # Type aliases для domain типов
 
   domain/
-    models.go      # Data models
+    models.go                # Общие структуры (AuditReport, Issue, ProjectMap, ...)
 ```
 
 ---
@@ -339,34 +354,15 @@ internal/
 
 ### Добавление нового tool
 
-1. Добавьте input struct в `internal/tools/executor.go`:
-   ```go
-   type NewToolInput struct {
-       Param1 string `json:"param1"`
-   }
-   ```
+1. Добавьте input struct в `internal/tools/executor.go`.
+2. Добавьте метод в `ToolExecutor`.
+3. Зарегистрируйте схему tool в `internal/mcp/server.go` (`handleToolsList`).
+4. Добавьте обработку в `handleToolsCall`.
 
-2. Добавьте метод в `ToolExecutor`:
-   ```go
-   func (te *ToolExecutor) NewTool(ctx context.Context, input NewToolInput) (*domain.AuditReport, error) {
-       // логика
-   }
-   ```
+### Добавление нового языка
 
-3. Зарегистрируйте tool в `internal/mcp/server.go`:
-   ```go
-   {
-       Name:        "new_tool",
-       Description: "Description",
-       InputSchema: ToolInputSchema{...},
-   }
-   ```
-
-4. Добавьте обработку в `handleToolsCall`:
-   ```go
-   case "new_tool":
-       // вызов
-   ```
+1. Создайте `internal/analyzer/<lang>/analyzer.go`, реализующий `ProjectAnalyzer`.
+2. Добавьте одну строку в слайс реестра в `internal/analyzer/registry.go`.
 
 ---
 

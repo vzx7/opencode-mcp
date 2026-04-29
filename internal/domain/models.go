@@ -24,21 +24,22 @@ type AuditReport struct {
 }
 
 type ArchitectureRules struct {
-	Layers       []LayerRule       `json:"layers"`
-	Dependencies []DependencyRule `json:"dependencies"`
+	Layers       []LayerRule      `json:"layers"`
+	Dependencies []DependencyRule `json:"forbidden_dependencies"`
 	Constraints  []string         `json:"constraints"`
 }
 
 type LayerRule struct {
-	Name    string   `json:"name"`
-	Paths  []string `json:"paths"`
-	Allow []string `json:"allow"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Paths       []string `json:"patterns"`
+	Allow       []string `json:"allow_imports_from"`
 }
 
 type DependencyRule struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	 Violation bool   `json:"violation"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type ProjectMap struct {

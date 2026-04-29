@@ -1,15 +1,15 @@
 # AI Tech Lead MCP 服务器
 
-面向AI助手的MCP服务器，提供代码架构审计和审查工具。
+面向AI助手的MCP服务器，提供代码架构审计和审查工具。支持 Go、TypeScript、Python、Rust 和 Java 项目。
 
 ## 功能特性
 
-服务器提供3个MCP工具：
+服务器提供 3 个 MCP 工具：
 
 | 工具 | 描述 |
-|------|-------------|
-| `architecture_review` | 完整项目架构审计 |
-| `architecture_compliance_check` | 检查是否符合目标架构 |
+|------|------|
+| `architecture_review` | 完整项目架构审计，包含关键文件快照 |
+| `architecture_compliance_check` | 对照架构规则和文档进行合规性检查 |
 | `module_audit` | 审计单个文件或模块 |
 
 ---
@@ -19,28 +19,29 @@
 在项目根目录创建 `.env` 文件：
 
 ```bash
-# 从 .env.example 复制
 cp .env.example .env
 ```
 
 ### .env 参数
 
-| 变量　　　 | 描述　　　　　　　　　　　　　　　　　　　　　 | 默认值　 |
-| ------------| ------------------------------------------------| ----------|
-| `PROVIDER` | LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容) | `mock`　 |
-| `LLM`　　　| 模型　　　　　　　　　　　　　　　　　　　　　 | `gpt-4o` |
-| `API_KEY`　| API密钥　　　　　　　　　　　　　　　　　　　　| -　　　　|
-| `ENDPOINT` | 自定义端点　　　　　　　　　　　　　　　　　　 | -　　　　|
-| `PROJECT`　| 项目路径　　　　　　　　　　　　　　　　　　　 | 当前目录 |
-| `PORT`　　 | 端口　　　　　　　　　　　　　　　　　　　　　 | `8080`　 |
-| `LANGUAGE` | 响应语言 (`ru`, `en`, `zh`)                                     | `ru`     |
+| 变量                  | 描述                                          | 默认值       |
+|-----------------------|-----------------------------------------------|--------------|
+| `PROVIDER`            | LLM 提供商 (`mock`, `openai`, `anthropic`)    | `mock`       |
+| `LLM`                 | 模型名称                                      | `gpt-4o`     |
+| `OPENAI_API_KEY`      | OpenAI API 密钥                               | —            |
+| `ANTHROPIC_API_KEY`   | Anthropic API 密钥                            | —            |
+| `ENDPOINT`            | 自定义端点（OpenAI 兼容 API）                 | —            |
+| `PROJECT`             | 默认项目路径                                  | 当前目录     |
+| `PORT`                | HTTP 服务器端口                               | `8080`       |
+| `LANGUAGE`            | 响应语言 (`ru`, `en`, `zh`)                   | `ru`         |
+
+> **注意：** LLM 请求的 HTTP 超时时间为 10 分钟。
 
 ### .env 示例
 
-**Mock (无LLM)：**
+**Mock（无 LLM，用于测试）：**
 ```env
 PROVIDER=mock
-LLM=
 PORT=8080
 ```
 
@@ -48,53 +49,52 @@ PORT=8080
 ```env
 PROVIDER=openai
 LLM=gpt-4o
-API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 ```
 
-**Anthropic** *（尚未实现，回退到mock）*：
+**Anthropic：**
 ```env
 PROVIDER=anthropic
 LLM=claude-3-5-sonnet-20241022
-API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### CLI标志
+### CLI 标志
 
 所有标志覆盖 `.env` 中对应的值：
 
 ```
--stdio         为MCP客户端以stdio模式运行（Claude Desktop、Cursor等）
--provider      LLM提供商（覆盖PROVIDER）
--llm           模型名称（覆盖LLM）
--api-key       API密钥（覆盖API_KEY）
--endpoint      自定义端点（覆盖ENDPOINT）
--port          端口（覆盖PORT）
--project       项目路径（覆盖PROJECT）
--debug-dir     调试输出目录（默认：<project>/debug）
--debug         启用详细日志
+-stdio       以 stdio 模式运行（Claude Desktop、Cursor 等 MCP 客户端）
+-provider    LLM 提供商（覆盖 PROVIDER）
+-llm         模型名称（覆盖 LLM）
+-endpoint    自定义端点（覆盖 ENDPOINT）
+-port        端口（覆盖 PORT）
+-project     项目路径（覆盖 PROJECT）
+-debug-dir   调试输出目录（默认：<project>/debug）
+-debug       启用详细日志
 ```
+
+> **安全提示：** 将 API 密钥存储在 `.env` 文件中——该文件已加入 `.gitignore`。
 
 **示例：**
 ```bash
-# HTTP模式
+# HTTP 模式
 go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
 
-# MCP客户端的stdio模式
-go run ./cmd -stdio -provider openai -llm gpt-4o -project /path/to/project
+# MCP 客户端 stdio 模式
+go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022 -project /path/to/project
 
 # 自定义调试输出目录
 go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
 ```
 
-### Debug模式
-
-使用 `-debug` 运行以获取LLM请求、响应和文件保存的详细日志：
+### Debug 模式
 
 ```bash
 go run ./cmd -debug -project /path/to/project
 ```
 
-默认情况下，报告以 `.md` 和 `.json` 两种格式保存到 `<project>/debug/`。
+每次工具调用时，报告以 `.md` 和 `.json` 两种格式保存到 `<project>/debug/`。
 
 ---
 
@@ -110,27 +110,27 @@ go run ./cmd
 
 ### 2. 连接到 opencode
 
-在 `~/.opencode/mcp.json` 中添加配置（服务器将从 `.env` 加载设置）：
+在 `~/.opencode/mcp.json` 中添加：
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "mcp_custom": {
+    "mcp_project_audit": {
       "type": "remote",
-      "url": "localhost:8080",
+      "url": "http://localhost:8080",
       "enabled": true
     }
   }
 }
 ```
 
-重启 opencode 后，可以使用以下命令：
+重启 opencode 后，可使用以下技能命令：
 
 ```
-/architecture-review project_path=/path/to/project
-/architecture-compliance-check project_path=/path/to/project
-/module-audit module_path=/path/to/module
+/architecture_review
+/architecture_compliance_check
+/module_audit
 ```
 
 ---
@@ -139,13 +139,18 @@ go run ./cmd
 
 ### architecture_review
 
-分析项目作为系统，识别架构问题。
+分析整个项目架构：层次结构、导入图、文件指标、git 热点。通过 `include_paths` 接受关键文件列表，使 LLM 专注于架构上最重要的文件。
 
 **参数：**
-- `project_path` (string, 可选) - 项目路径
-- `provider` (string, 可选) - LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容)
-- `llm` (string, 可选) - 模型 (例如 `gpt-4o`)
-- `language` (string, 可选) - 响应语言 (`ru`, `en`, `zh`)
+
+| 参数                   | 类型     | 描述 |
+|------------------------|----------|------|
+| `project_path`         | string   | 项目路径（可选） |
+| `provider`             | string   | LLM 提供商：`mock`, `openai`, `anthropic` |
+| `llm`                  | string   | 模型名称（如 `gpt-4o`、`claude-3-5-sonnet-20241022`） |
+| `language`             | string   | 响应语言：`ru`, `en`, `zh` |
+| `programming_language` | string   | 项目语言：`go`, `python`, `typescript`, `rust`, `java`。不指定则自动检测。 |
+| `include_paths`        | string[] | 代码快照中包含的关键文件相对路径。不指定则按文件大小自动发现。 |
 
 **调用示例：**
 ```json
@@ -159,25 +164,26 @@ go run ./cmd
       "project_path": "/path/to/my-project",
       "provider": "openai",
       "llm": "gpt-4o",
-      "language": "en"
+      "language": "zh",
+      "programming_language": "go",
+      "include_paths": [
+        "cmd/main.go",
+        "internal/domain/models.go",
+        "internal/mcp/server.go"
+      ]
     }
   }
 }
 ```
 
-**从 opencode 调用：**
-```
-/architecture-review project_path=/path/to/project provider=openai llm=gpt-4o
-```
-
-**响应：** 工具以MCP content text形式返回Markdown格式报告。同时向debug目录保存两个文件：
+**响应：** 以 MCP content text 形式返回 Markdown 格式报告。同时向 debug 目录写入两个文件：
 - `architecture_review_<timestamp>.md` — 可读报告
-- `architecture_review_<timestamp>.json` — 供AI代理使用的结构化报告：
+- `architecture_review_<timestamp>.json` — 结构化报告：
 
 ```json
 {
   "tool": "architecture_review",
-  "timestamp": "2026-04-26T22:42:57+03:00",
+  "timestamp": "2026-04-28T12:00:00+03:00",
   "project": "/path/to/project",
   "report": {
     "score": 85,
@@ -195,38 +201,48 @@ go run ./cmd
 }
 ```
 
+---
+
 ### architecture_compliance_check
 
-检查项目是否符合目标架构。
+检查项目是否符合定义的架构规则。可选择接受架构文档目录（ADR、规范）作为 LLM 评估的基准。
 
 **参数：**
-- `project_path` (string, 可选) - 项目路径
-- `provider` (string, 可选) - LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容)
-- `llm` (string, 可选) - 模型
-- `target_architecture` (object, 可选) - 架构规则
-- `language` (string, 可选) - 响应语言 (`ru`, `en`, `zh`)
 
-**target_architecture 格式：**
+| 参数                   | 类型     | 描述 |
+|------------------------|----------|------|
+| `project_path`         | string   | 项目路径 |
+| `provider`             | string   | LLM 提供商 |
+| `llm`                  | string   | 模型名称 |
+| `language`             | string   | 响应语言：`ru`, `en`, `zh` |
+| `programming_language` | string   | 项目语言。不指定则自动检测。 |
+| `target_architecture`  | object   | 架构规则（层次、允许的导入） |
+| `docs`                 | string   | 包含 `.architecture.json` 的目录相对路径（如 `docs/arch`）。未指定时自动查找 `docs/arch`。 |
+| `include_paths`        | string[] | 代码快照中包含的关键源文件相对路径。 |
+
+**`target_architecture` 格式**（也是 `.architecture.json` 的格式）：
 ```json
 {
   "layers": [
     {
       "name": "cmd",
-      "paths": ["cmd"],
-      "allow": ["main"]
+      "patterns": ["cmd"],
+      "allow_imports_from": ["domain", "mcp", "config"]
     },
     {
-      "name": "internal",
-      "paths": ["internal"],
-      "allow": ["api", "domain", "service", "repository"]
+      "name": "domain",
+      "patterns": ["internal/domain"],
+      "allow_imports_from": []
     }
   ],
-  "dependencies": [
-    {"from": "internal", "to": "external", "violation": false}
+  "forbidden_dependencies": [
+    {"from": "domain", "to": "cmd", "reason": "no upward deps"}
   ],
-  "constraints": []
+  "constraints": ["所有共享类型必须定义在 internal/domain"]
 }
 ```
+
+将 `.architecture.json` 放置在 `docs/arch/` 中，无需传递 `docs` 参数即可自动加载。
 
 **调用示例：**
 ```json
@@ -239,33 +255,32 @@ go run ./cmd
     "arguments": {
       "project_path": "/path/to/project",
       "provider": "anthropic",
-      "llm": "claude-3-5-sonnet-20241022",
-      "target_architecture": {
-        "layers": [
-          {"name": "cmd", "paths": ["cmd"], "allow": []},
-          {"name": "internal", "paths": ["internal"], "allow": ["domain", "service"]}
-        ]
-      }
+      "llm": "claude-sonnet-4-6",
+      "include_paths": [
+        "internal/domain/models.go",
+        "internal/mcp/server.go"
+      ]
     }
   }
 }
 ```
 
-**从 opencode 调用：**
-```
-/architecture-compliance-check project_path=/path/to/project provider=anthropic llm=claude-3-5-sonnet-20241022
-```
+---
 
 ### module_audit
 
-审计单个文件或模块。
+审计单个文件或目录：正确性、设计质量、耦合度、内聚性、潜在错误、复杂度。
 
 **参数：**
-- `module_path` (string, 可选) - 文件或模块路径
-- `project_path` (string, 可选) - 项目根路径
-- `provider` (string, 可选) - LLM提供商 (`mock`, `openai`, 或任何OpenAI兼容)
-- `llm` (string, 可选) - 模型
-- `language` (string, 可选) - 响应语言 (`ru`, `en`, `zh`)
+
+| 参数                   | 类型   | 描述 |
+|------------------------|--------|------|
+| `module_path`          | string | 要审计的文件或目录路径 |
+| `project_path`         | string | 项目根路径 |
+| `provider`             | string | LLM 提供商 |
+| `llm`                  | string | 模型名称 |
+| `language`             | string | 响应语言：`ru`, `en`, `zh` |
+| `programming_language` | string | 项目语言。不指定则自动检测。 |
 
 **调用示例：**
 ```json
@@ -277,31 +292,23 @@ go run ./cmd
     "name": "module_audit",
     "arguments": {
       "module_path": "/path/to/project/internal/service",
+      "project_path": "/path/to/project",
       "provider": "openai",
-      "llm": "gpt-4o-mini"
+      "llm": "gpt-4o-mini",
+      "programming_language": "go"
     }
   }
 }
 ```
 
-**从 opencode 调用：**
-```
-/module-audit module_path=/path/to/project/internal/service provider=openai llm=gpt-4o-mini
-```
+---
 
 ### 提供商和模型选择优先级
 
-1. **工具调用参数**（最高优先级）：
-   - `provider=openai llm=gpt-4o` — 每次动态选择
-
-2. **启动服务器时的CLI标志**：
-   - `-provider=... -llm=...` — 覆盖 `.env`
-
-3. **`.env` 文件**：
-   - `PROVIDER=...`, `LLM=...` — 所有调用的默认值
-
-4. **硬编码默认值**（最低优先级）：
-   - 提供商: `mock`, 模型: `gpt-4o`
+1. **工具调用参数** — `provider` / `llm`（最高优先级）
+2. **启动时的 CLI 标志** — `-provider` / `-llm`
+3. **`.env` 文件** — `PROVIDER` / `LLM`
+4. **硬编码默认值** — 提供商：`mock`，模型：`gpt-4o`
 
 ---
 
@@ -309,28 +316,36 @@ go run ./cmd
 
 ```
 cmd/
-  main.go              # 入口点
+  main.go                    # 入口点，CLI 标志
 
 internal/
   config/
-    config.go        # .env 加载
+    config.go                # .env 加载和验证
 
   mcp/
-    server.go       # MCP服务器 (JSON-RPC)
+    server.go                # MCP 服务器（JSON-RPC 2.0，HTTP + stdio）
 
   tools/
-    executor.go    # 工具执行逻辑
+    executor.go              # 工具执行、提示词构建、报告持久化
 
   analyzer/
-    engine.go      # 项目和模块分析
+    engine.go                # 语言无关的分析编排器
+    language.go              # ProjectAnalyzer 接口
+    registry.go              # 自动检测（go.mod、tsconfig.json、pyproject.toml 等）
+    golang/
+      analyzer.go            # Go：通过 go/ast 构建导入图，go.mod，_test.go 检测
+    python/
+      analyzer.go            # Python：语言检测，空导入图（stub）
+    typescript/
+      analyzer.go            # TypeScript：语言检测，空导入图（stub）
 
   llm/
-    provider.go      # LLM提供商接口
-    provider_impl.go  # 提供商实现
-    types.go         # 类型别名
+    provider.go              # LLMProvider 接口
+    provider_impl.go         # OpenAI、Anthropic、Mock 实现 + 提示词构建器
+    types.go                 # domain 类型别名
 
   domain/
-    models.go      # 数据模型
+    models.go                # 共享数据结构（AuditReport、Issue、ProjectMap 等）
 ```
 
 ---
@@ -339,34 +354,15 @@ internal/
 
 ### 添加新工具
 
-1. 在 `internal/tools/executor.go` 中添加输入结构：
-   ```go
-   type NewToolInput struct {
-       Param1 string `json:"param1"`
-   }
-   ```
+1. 在 `internal/tools/executor.go` 中添加输入结构体。
+2. 在 `ToolExecutor` 中添加方法。
+3. 在 `internal/mcp/server.go` 的 `handleToolsList` 中注册工具 schema。
+4. 在 `handleToolsCall` 中添加处理分支。
 
-2. 在 `ToolExecutor` 中添加方法：
-   ```go
-   func (te *ToolExecutor) NewTool(ctx context.Context, input NewToolInput) (*domain.AuditReport, error) {
-       // 逻辑
-   }
-   ```
+### 添加新语言
 
-3. 在 `internal/mcp/server.go` 中注册工具：
-   ```go
-   {
-       Name:        "new_tool",
-       Description: "Description",
-       InputSchema: ToolInputSchema{...},
-   }
-   ```
-
-4. 在 `handleToolsCall` 中添加处理：
-   ```go
-   case "new_tool":
-       // 调用
-   ```
+1. 创建 `internal/analyzer/<lang>/analyzer.go`，实现 `ProjectAnalyzer` 接口。
+2. 在 `internal/analyzer/registry.go` 的注册切片中添加一行。
 
 ---
 

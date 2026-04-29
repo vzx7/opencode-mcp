@@ -247,7 +247,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) interface{} {
 						},
 						"docs": {
 							Type:        "string",
-							Description: "Относительный путь к директории с архитектурной документацией (ADR, спецификации). Содержимое передаётся в LLM как эталон архитектуры",
+							Description: "Относительный путь к директории, содержащей .architecture.json с правилами слоёв и зависимостей. Если файл найден — используется как source of truth вместо дефолтных правил",
 						},
 						"include_paths": {
 							Type:        "array",

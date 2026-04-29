@@ -1,6 +1,6 @@
 # AI Tech Lead MCP Server
 
-MCP server for AI assistants, providing code architecture audit and review tools.
+MCP server for AI assistants, providing code architecture audit and review tools. Supports Go, TypeScript, Python, Rust, and Java projects.
 
 ## Translations
 
@@ -13,9 +13,9 @@ The server provides 3 MCP tools:
 
 | Tool | Description |
 |------|-------------|
-| `architecture_review` | Full project architecture audit |
-| `architecture_compliance_check` | Check compliance with target architecture |
-| `module_audit` | Audit individual file or module |
+| `architecture_review` | Full project architecture audit with curated file snapshot |
+| `architecture_compliance_check` | Check compliance against target architecture rules and docs |
+| `module_audit` | Audit an individual file or module |
 
 ---
 
@@ -24,31 +24,29 @@ The server provides 3 MCP tools:
 Create a `.env` file in the project root:
 
 ```bash
-# Copy from .env.example
 cp .env.example .env
 ```
 
 ### .env Parameters
 
-| Variable            | Description                                  | Default           |
-| ---------------------| ----------------------------------------------| -------------------|
-| `PROVIDER`          | LLM provider (`mock`, `openai`, `anthropic`) | `mock`            |
-| `LLM`               | Model                                        | `gpt-4o`          |
-| `OPENAI_API_KEY`    | OpenAI API key                               | -                 |
-| `ANTHROPIC_API_KEY` | Anthropic API key                            | -                 |
-| `ENDPOINT`          | Custom endpoint (for OpenAI-compatible APIs) | -                 |
-| `PROJECT`           | Project path                                 | current directory |
-| `PORT`              | Port                                         | `8080`            |
-| `LANGUAGE`          | Response language (`ru`, `en`, `zh`)         | `ru`              |
+| Variable             | Description                                   | Default            |
+|----------------------|-----------------------------------------------|--------------------|
+| `PROVIDER`           | LLM provider (`mock`, `openai`, `anthropic`)  | `mock`             |
+| `LLM`                | Model name                                    | `gpt-4o`           |
+| `OPENAI_API_KEY`     | OpenAI API key                                | —                  |
+| `ANTHROPIC_API_KEY`  | Anthropic API key                             | —                  |
+| `ENDPOINT`           | Custom endpoint (OpenAI-compatible APIs)      | —                  |
+| `PROJECT`            | Default project path                          | current directory  |
+| `PORT`               | HTTP server port                              | `8080`             |
+| `LANGUAGE`           | Response language (`ru`, `en`, `zh`)          | `ru`               |
 
-> **Note:** HTTP timeout for LLM requests is 10 minutes (suitable for long responses).
+> **Note:** HTTP timeout for LLM requests is 10 minutes.
 
 ### .env Examples
 
-**Mock (without LLM):**
+**Mock (no LLM, for testing):**
 ```env
 PROVIDER=mock
-LLM=
 PORT=8080
 ```
 
@@ -63,27 +61,25 @@ OPENAI_API_KEY=sk-...
 ```env
 PROVIDER=anthropic
 LLM=claude-3-5-sonnet-20241022
-API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
-
-**Note:** Anthropic provider requires API key. Without it, falls back to mock.
 
 ### CLI flags
 
 All flags override the corresponding `.env` values:
 
 ```
--stdio         Run in stdio mode for MCP clients (Claude Desktop, Cursor, etc.)
--provider      LLM provider (overrides PROVIDER)
--llm           Model name (overrides LLM)
--endpoint      Custom endpoint (overrides ENDPOINT)
--port          Port (overrides PORT)
--project       Project path (overrides PROJECT)
--debug-dir     Debug output directory (default: <project>/debug)
--debug         Enable verbose logging
+-stdio       Run in stdio mode for MCP clients (Claude Desktop, Cursor, etc.)
+-provider    LLM provider (overrides PROVIDER)
+-llm         Model name (overrides LLM)
+-endpoint    Custom endpoint (overrides ENDPOINT)
+-port        Port (overrides PORT)
+-project     Project path (overrides PROJECT)
+-debug-dir   Debug output directory (default: <project>/debug)
+-debug       Enable verbose logging
 ```
 
-> **Security Note:** For production, use `.env` file for API keys (it's in `.gitignore`).
+> **Security note:** Store API keys in `.env` — it is listed in `.gitignore`.
 
 **Examples:**
 ```bash
@@ -91,7 +87,7 @@ All flags override the corresponding `.env` values:
 go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
 
 # stdio mode for MCP clients
-go run ./cmd -stdio -provider openai -llm gpt-4o -project /path/to/project
+go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022 -project /path/to/project
 
 # Custom debug output directory
 go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
@@ -99,13 +95,11 @@ go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
 
 ### Debug mode
 
-Run with `-debug` for verbose logging of LLM requests, responses, and file saves:
-
 ```bash
 go run ./cmd -debug -project /path/to/project
 ```
 
-By default, reports are saved to `<project>/debug/` as both `.md` and `.json` files.
+Reports are saved to `<project>/debug/` as both `.md` and `.json` files on every tool call.
 
 ---
 
@@ -117,31 +111,31 @@ By default, reports are saved to `<project>/debug/` as both `.md` and `.json` fi
 go run ./cmd
 ```
 
-By default, the server listens on `http://localhost:8080`.
+The server listens on `http://localhost:8080` by default.
 
 ### 2. Connect to opencode
 
-Add configuration to `~/.opencode/mcp.json` (server will load settings from `.env`):
+Add to `~/.opencode/mcp.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "mcp_custom": {
+    "mcp_project_audit": {
       "type": "remote",
-      "url": "localhost:8080",
+      "url": "http://localhost:8080",
       "enabled": true
     }
   }
 }
 ```
 
-After restarting opencode, these commands are available:
+After restarting opencode, the following skill commands are available:
 
 ```
-/architecture-review project_path=/path/to/project
-/architecture-compliance-check project_path=/path/to/project
-/module-audit module_path=/path/to/module
+/architecture_review
+/architecture_compliance_check
+/module_audit
 ```
 
 ---
@@ -150,13 +144,18 @@ After restarting opencode, these commands are available:
 
 ### architecture_review
 
-Analyzes the project as a system, identifies architectural issues.
+Analyzes the full project architecture: layers, import graph, file metrics, git hotspots. Accepts a curated file list via `include_paths` to focus the LLM on the most important files.
 
 **Parameters:**
-- `project_path` (string, optional) - path to project
-- `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
-- `llm` (string, optional) - model (e.g. `gpt-4o`)
-- `language` (string, optional) - response language (`ru`, `en`, `zh`)
+
+| Parameter              | Type     | Description |
+|------------------------|----------|-------------|
+| `project_path`         | string   | Path to the project (optional, defaults to server's `--project`) |
+| `provider`             | string   | LLM provider: `mock`, `openai`, `anthropic` |
+| `llm`                  | string   | Model name (e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`) |
+| `language`             | string   | Response language: `ru`, `en`, `zh` |
+| `programming_language` | string   | Project language: `go`, `python`, `typescript`, `rust`, `java`. Auto-detected if omitted. |
+| `include_paths`        | string[] | Relative paths to key files for the code snapshot. Auto-discovered by size if omitted. |
 
 **Example call:**
 ```json
@@ -170,25 +169,26 @@ Analyzes the project as a system, identifies architectural issues.
       "project_path": "/path/to/my-project",
       "provider": "openai",
       "llm": "gpt-4o",
-      "language": "en"
+      "language": "en",
+      "programming_language": "go",
+      "include_paths": [
+        "cmd/main.go",
+        "internal/domain/models.go",
+        "internal/mcp/server.go"
+      ]
     }
   }
 }
 ```
 
-**From opencode:**
-```
-/architecture-review project_path=/path/to/project provider=openai llm=gpt-4o
-```
-
-**Response:** the tool returns a markdown-formatted report as MCP content text. Two files are also saved to the debug directory:
+**Response:** markdown report returned as MCP content text. Two files are also written to the debug directory:
 - `architecture_review_<timestamp>.md` — human-readable report
-- `architecture_review_<timestamp>.json` — structured report for AI agents:
+- `architecture_review_<timestamp>.json` — structured report:
 
 ```json
 {
   "tool": "architecture_review",
-  "timestamp": "2026-04-26T22:42:57+03:00",
+  "timestamp": "2026-04-28T12:00:00+03:00",
   "project": "/path/to/project",
   "report": {
     "score": 85,
@@ -206,38 +206,48 @@ Analyzes the project as a system, identifies architectural issues.
 }
 ```
 
+---
+
 ### architecture_compliance_check
 
-Checks project compliance against target architecture.
+Checks the project against defined architecture rules. Optionally accepts architecture documentation (ADRs, specs) as the ground truth for LLM evaluation.
 
 **Parameters:**
-- `project_path` (string, optional) - path to project
-- `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
-- `llm` (string, optional) - model
-- `target_architecture` (object, optional) - architecture rules
-- `language` (string, optional) - response language (`ru`, `en`, `zh`)
 
-**target_architecture format:**
+| Parameter              | Type     | Description |
+|------------------------|----------|-------------|
+| `project_path`         | string   | Path to the project |
+| `provider`             | string   | LLM provider |
+| `llm`                  | string   | Model name |
+| `language`             | string   | Response language: `ru`, `en`, `zh` |
+| `programming_language` | string   | Project language. Auto-detected if omitted. |
+| `target_architecture`  | object   | Architecture rules (layers, allowed imports) |
+| `docs`                 | string   | Relative path to directory containing `.architecture.json` (e.g. `docs/arch`). If omitted, `docs/arch` is tried automatically. |
+| `include_paths`        | string[] | Relative paths to key source files for the code snapshot. |
+
+**`target_architecture` format** (also the format of `.architecture.json`):
 ```json
 {
   "layers": [
     {
       "name": "cmd",
-      "paths": ["cmd"],
-      "allow": ["main"]
+      "patterns": ["cmd"],
+      "allow_imports_from": ["domain", "mcp", "config"]
     },
     {
-      "name": "internal",
-      "paths": ["internal"],
-      "allow": ["api", "domain", "service", "repository"]
+      "name": "domain",
+      "patterns": ["internal/domain"],
+      "allow_imports_from": []
     }
   ],
-  "dependencies": [
-    {"from": "internal", "to": "external", "violation": false}
+  "forbidden_dependencies": [
+    {"from": "domain", "to": "cmd", "reason": "no upward deps"}
   ],
-  "constraints": []
+  "constraints": ["All shared types must be in internal/domain"]
 }
 ```
+
+Place `.architecture.json` in `docs/arch/` — it will be loaded automatically without passing `docs`.
 
 **Example call:**
 ```json
@@ -250,33 +260,32 @@ Checks project compliance against target architecture.
     "arguments": {
       "project_path": "/path/to/project",
       "provider": "anthropic",
-      "llm": "claude-3-5-sonnet-20241022",
-      "target_architecture": {
-        "layers": [
-          {"name": "cmd", "paths": ["cmd"], "allow": []},
-          {"name": "internal", "paths": ["internal"], "allow": ["domain", "service"]}
-        ]
-      }
+      "llm": "claude-sonnet-4-6",
+      "include_paths": [
+        "internal/domain/models.go",
+        "internal/mcp/server.go"
+      ]
     }
   }
 }
 ```
 
-**From opencode:**
-```
-/architecture-compliance-check project_path=/path/to/project provider=anthropic llm=claude-3-5-sonnet-20241022
-```
+---
 
 ### module_audit
 
-Audits an individual file or module.
+Audits an individual file or directory: correctness, design quality, coupling, cohesion, potential bugs, complexity.
 
 **Parameters:**
-- `module_path` (string, optional) - path to file or module
-- `project_path` (string, optional) - path to project root
-- `provider` (string, optional) - LLM provider (`mock`, `openai`, or OpenAI-compatible)
-- `llm` (string, optional) - model
-- `language` (string, optional) - response language (`ru`, `en`, `zh`)
+
+| Parameter              | Type   | Description |
+|------------------------|--------|-------------|
+| `module_path`          | string | Path to the file or directory to audit |
+| `project_path`         | string | Project root path |
+| `provider`             | string | LLM provider |
+| `llm`                  | string | Model name |
+| `language`             | string | Response language: `ru`, `en`, `zh` |
+| `programming_language` | string | Project language. Auto-detected if omitted. |
 
 **Example call:**
 ```json
@@ -288,31 +297,23 @@ Audits an individual file or module.
     "name": "module_audit",
     "arguments": {
       "module_path": "/path/to/project/internal/service",
+      "project_path": "/path/to/project",
       "provider": "openai",
-      "llm": "gpt-4o-mini"
+      "llm": "gpt-4o-mini",
+      "programming_language": "go"
     }
   }
 }
 ```
 
-**From opencode:**
-```
-/module-audit module_path=/path/to/project/internal/service provider=openai llm=gpt-4o-mini
-```
+---
 
 ### Provider and Model Selection Priority
 
-1. **Tool call arguments** (highest priority):
-   - `provider=openai llm=gpt-4o` — dynamic per call
-
-2. **CLI flags at startup**:
-   - `-provider=... -llm=...` — override `.env`
-
-3. **`.env` file**:
-   - `PROVIDER=...`, `LLM=...` — default for all calls
-
-4. **Hardcoded defaults** (lowest priority):
-   - Provider: `mock`, Model: `gpt-4o`
+1. **Tool call arguments** — `provider` / `llm` per call (highest priority)
+2. **CLI flags at startup** — `-provider` / `-llm`
+3. **`.env` file** — `PROVIDER` / `LLM`
+4. **Hardcoded defaults** — provider: `mock`, model: `gpt-4o`
 
 ---
 
@@ -320,28 +321,36 @@ Audits an individual file or module.
 
 ```
 cmd/
-  main.go              # Entry point
+  main.go                    # Entry point, CLI flags
 
 internal/
   config/
-    config.go        # .env loading
+    config.go                # .env loading and validation
 
   mcp/
-    server.go       # MCP server (JSON-RPC)
+    server.go                # MCP server (JSON-RPC 2.0, HTTP + stdio)
 
   tools/
-    executor.go    # Tool execution logic
+    executor.go              # Tool execution, prompt building, report persistence
 
   analyzer/
-    engine.go      # Project and module analysis
+    engine.go                # Language-agnostic analysis orchestrator
+    language.go              # ProjectAnalyzer interface
+    registry.go              # Auto-detection (go.mod, tsconfig.json, pyproject.toml, ...)
+    golang/
+      analyzer.go            # Go: go/ast import graph, go.mod, _test.go detection
+    python/
+      analyzer.go            # Python stub: detection, empty import graph
+    typescript/
+      analyzer.go            # TypeScript stub: detection, empty import graph
 
   llm/
-    provider.go      # LLM provider interface
-    provider_impl.go  # Provider implementations
-    types.go         # Type aliases
+    provider.go              # LLMProvider interface
+    provider_impl.go         # OpenAI, Anthropic, Mock implementations + prompt builders
+    types.go                 # Type aliases for domain types
 
   domain/
-    models.go      # Data models
+    models.go                # Shared data structs (AuditReport, Issue, ProjectMap, ...)
 ```
 
 ---
@@ -350,34 +359,15 @@ internal/
 
 ### Adding a new tool
 
-1. Add input struct in `internal/tools/executor.go`:
-   ```go
-   type NewToolInput struct {
-       Param1 string `json:"param1"`
-   }
-   ```
+1. Add input struct in `internal/tools/executor.go`.
+2. Add method to `ToolExecutor`.
+3. Register tool schema in `internal/mcp/server.go` (`handleToolsList`).
+4. Add handler case in `handleToolsCall`.
 
-2. Add method to `ToolExecutor`:
-   ```go
-   func (te *ToolExecutor) NewTool(ctx context.Context, input NewToolInput) (*domain.AuditReport, error) {
-       // logic
-   }
-   ```
+### Adding a new language
 
-3. Register tool in `internal/mcp/server.go`:
-   ```go
-   {
-       Name:        "new_tool",
-       Description: "Description",
-       InputSchema: ToolInputSchema{...},
-   }
-   ```
-
-4. Add handler in `handleToolsCall`:
-   ```go
-   case "new_tool":
-       // call
-   ```
+1. Create `internal/analyzer/<lang>/analyzer.go` implementing `ProjectAnalyzer`.
+2. Add one line to the registry slice in `internal/analyzer/registry.go`.
 
 ---
 
