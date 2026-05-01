@@ -31,9 +31,10 @@ cp .env.example .env
 | `OPENAI_API_KEY`      | OpenAI API 密钥                               | —            |
 | `ANTHROPIC_API_KEY`   | Anthropic API 密钥                            | —            |
 | `ENDPOINT`            | 自定义端点（OpenAI 兼容 API）                 | —            |
-| `PROJECT`             | 默认项目路径                                  | 当前目录     |
 | `PORT`                | HTTP 服务器端口                               | `8080`       |
 | `LANGUAGE`            | 响应语言 (`ru`, `en`, `zh`)                   | `ru`         |
+
+> **注意：** 未知的提供商类型将回退到 OpenAI 兼容 API。使用 `ENDPOINT` 连接第三方提供商（如 OpenRouter、Groq、本地 Ollama）。
 
 > **注意：** LLM 请求的 HTTP 超时时间为 10 分钟。
 
@@ -69,8 +70,6 @@ ANTHROPIC_API_KEY=sk-ant-...
 -llm         模型名称（覆盖 LLM）
 -endpoint    自定义端点（覆盖 ENDPOINT）
 -port        端口（覆盖 PORT）
--project     项目路径（覆盖 PROJECT）
--debug-dir   调试输出目录（默认：<project>/debug）
 -debug       启用详细日志
 ```
 
@@ -79,22 +78,19 @@ ANTHROPIC_API_KEY=sk-ant-...
 **示例：**
 ```bash
 # HTTP 模式
-go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
+go run ./cmd -provider openai -llm gpt-4o
 
 # MCP 客户端 stdio 模式
-go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022 -project /path/to/project
-
-# 自定义调试输出目录
-go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
+go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022
 ```
 
 ### Debug 模式
 
 ```bash
-go run ./cmd -debug -project /path/to/project
+go run ./cmd -debug
 ```
 
-每次工具调用时，报告以 `.md` 和 `.json` 两种格式保存到 `<project>/debug/`。
+每次工具调用时，提示词保存到 `<project_path>/debug/input/`，报告以 `.md` 和 `.json` 两种格式保存到 `<project_path>/debug/`。
 
 ---
 
@@ -145,7 +141,7 @@ go run ./cmd
 
 | 参数                   | 类型     | 描述 |
 |------------------------|----------|------|
-| `project_path`         | string   | 项目路径（可选） |
+| `project_path`         | string   | 项目路径（**必需**） |
 | `provider`             | string   | LLM 提供商：`mock`, `openai`, `anthropic` |
 | `llm`                  | string   | 模型名称（如 `gpt-4o`、`claude-3-5-sonnet-20241022`） |
 | `language`             | string   | 响应语言：`ru`, `en`, `zh` |
@@ -211,7 +207,7 @@ go run ./cmd
 
 | 参数                   | 类型     | 描述 |
 |------------------------|----------|------|
-| `project_path`         | string   | 项目路径 |
+| `project_path`         | string   | 项目路径（**必需**） |
 | `provider`             | string   | LLM 提供商 |
 | `llm`                  | string   | 模型名称 |
 | `language`             | string   | 响应语言：`ru`, `en`, `zh` |
@@ -276,7 +272,7 @@ go run ./cmd
 | 参数                   | 类型   | 描述 |
 |------------------------|--------|------|
 | `module_path`          | string | 要审计的文件或目录路径 |
-| `project_path`         | string | 项目根路径 |
+| `project_path`         | string | 项目根路径（**必需**） |
 | `provider`             | string | LLM 提供商 |
 | `llm`                  | string | 模型名称 |
 | `language`             | string | 响应语言：`ru`, `en`, `zh` |

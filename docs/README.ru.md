@@ -31,9 +31,10 @@ cp .env.example .env
 | `OPENAI_API_KEY`     | API ключ OpenAI                                       | —                  |
 | `ANTHROPIC_API_KEY`  | API ключ Anthropic                                    | —                  |
 | `ENDPOINT`           | Кастомный endpoint (для OpenAI-совместимых API)       | —                  |
-| `PROJECT`            | Путь к проекту по умолчанию                           | текущая директория |
 | `PORT`               | Порт HTTP сервера                                     | `8080`             |
 | `LANGUAGE`           | Язык ответов (`ru`, `en`, `zh`)                       | `ru`               |
+
+> **Примечание:** Неизвестные провайдеры работают через OpenAI-совместимый API. Используйте `ENDPOINT` для сторонних провайдеров (OpenRouter, Groq, локальный Ollama).
 
 > **Примечание:** таймаут HTTP-запросов к LLM — 10 минут.
 
@@ -69,8 +70,6 @@ ANTHROPIC_API_KEY=sk-ant-...
 -llm         Модель (переопределяет LLM)
 -endpoint    Кастомный endpoint (переопределяет ENDPOINT)
 -port        Порт (переопределяет PORT)
--project     Путь к проекту (переопределяет PROJECT)
--debug-dir   Директория для отчётов (по умолчанию: <project>/debug)
 -debug       Подробное логирование
 ```
 
@@ -79,22 +78,19 @@ ANTHROPIC_API_KEY=sk-ant-...
 **Примеры:**
 ```bash
 # HTTP режим
-go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
+go run ./cmd -provider openai -llm gpt-4o
 
 # stdio режим для MCP клиентов
-go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022 -project /path/to/project
-
-# Своя директория для отчётов
-go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
+go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022
 ```
 
 ### Debug режим
 
 ```bash
-go run ./cmd -debug -project /path/to/project
+go run ./cmd -debug
 ```
 
-Отчёты сохраняются в `<project>/debug/` в виде `.md` и `.json` файлов при каждом вызове tool.
+Промпты сохраняются в `<project_path>/debug/input/`, а отчёты — в `<project_path>/debug/` в виде `.md` и `.json` файлов при каждом вызове tool.
 
 ---
 
@@ -145,7 +141,7 @@ go run ./cmd
 
 | Параметр               | Тип      | Описание |
 |------------------------|----------|----------|
-| `project_path`         | string   | Путь к проекту (опционально) |
+| `project_path`         | string   | Путь к проекту (**обязательный**) |
 | `provider`             | string   | LLM провайдер: `mock`, `openai`, `anthropic` |
 | `llm`                  | string   | Модель (например, `gpt-4o`, `claude-3-5-sonnet-20241022`) |
 | `language`             | string   | Язык ответа: `ru`, `en`, `zh` |
@@ -211,7 +207,7 @@ go run ./cmd
 
 | Параметр               | Тип      | Описание |
 |------------------------|----------|----------|
-| `project_path`         | string   | Путь к проекту |
+| `project_path`         | string   | Путь к проекту (**обязательный**) |
 | `provider`             | string   | LLM провайдер |
 | `llm`                  | string   | Модель |
 | `language`             | string   | Язык ответа: `ru`, `en`, `zh` |
@@ -276,7 +272,7 @@ go run ./cmd
 | Параметр               | Тип    | Описание |
 |------------------------|--------|----------|
 | `module_path`          | string | Путь к файлу или директории |
-| `project_path`         | string | Путь к корню проекта |
+| `project_path`         | string | Путь к корню проекта (**обязательный**) |
 | `provider`             | string | LLM провайдер |
 | `llm`                  | string | Модель |
 | `language`             | string | Язык ответа: `ru`, `en`, `zh` |

@@ -67,4 +67,4 @@ Copy `.env.example` to `.env` and set `API_KEY` for non-mock providers. Each too
 
 ## Debug Output
 
-When `-debug` flag is set, prompts are saved to `<project_path>/debug/input/` and reports are written to `<project_path>/debug/` as both `<tool>_<timestamp>_<timestamp_nanos>.md` and `.json`. The `debug/` directory is git-ignored.
+When `-debug` flag is set, prompts are saved to `<project_path>/debug/input/` and reports are written to `<project_path>/debug/` as both `<tool>_<YYYYMMDD_HHMMSS>_<nanos>.md` and `.json`. The `debug/` directory is git-ignored.

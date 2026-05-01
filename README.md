@@ -36,9 +36,10 @@ cp .env.example .env
 | `OPENAI_API_KEY`     | OpenAI API key                                | —                  |
 | `ANTHROPIC_API_KEY`  | Anthropic API key                             | —                  |
 | `ENDPOINT`           | Custom endpoint (OpenAI-compatible APIs)      | —                  |
-| `PROJECT`            | Default project path                          | current directory  |
 | `PORT`               | HTTP server port                              | `8080`             |
 | `LANGUAGE`           | Response language (`ru`, `en`, `zh`)          | `ru`               |
+
+> **Note:** Any unknown provider type falls back to OpenAI-compatible API. Use `ENDPOINT` to connect to third-party providers (e.g. OpenRouter, Groq, local Ollama).
 
 > **Note:** HTTP timeout for LLM requests is 10 minutes.
 
@@ -74,8 +75,6 @@ All flags override the corresponding `.env` values:
 -llm         Model name (overrides LLM)
 -endpoint    Custom endpoint (overrides ENDPOINT)
 -port        Port (overrides PORT)
--project     Project path (overrides PROJECT)
--debug-dir   Debug output directory (default: <project>/debug)
 -debug       Enable verbose logging
 ```
 
@@ -84,22 +83,19 @@ All flags override the corresponding `.env` values:
 **Examples:**
 ```bash
 # HTTP mode
-go run ./cmd -provider openai -llm gpt-4o -project /path/to/project
+go run ./cmd -provider openai -llm gpt-4o
 
 # stdio mode for MCP clients
-go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022 -project /path/to/project
-
-# Custom debug output directory
-go run ./cmd -stdio -project /path/to/project -debug-dir /tmp/audit
+go run ./cmd -stdio -provider anthropic -llm claude-3-5-sonnet-20241022
 ```
 
 ### Debug mode
 
 ```bash
-go run ./cmd -debug -project /path/to/project
+go run ./cmd -debug
 ```
 
-Reports are saved to `<project>/debug/` as both `.md` and `.json` files on every tool call.
+Prompts are saved to `<project_path>/debug/input/` and reports to `<project_path>/debug/` as both `.md` and `.json` files on every tool call.
 
 ---
 
@@ -150,7 +146,7 @@ Analyzes the full project architecture: layers, import graph, file metrics, git 
 
 | Parameter              | Type     | Description |
 |------------------------|----------|-------------|
-| `project_path`         | string   | Path to the project (optional, defaults to server's `--project`) |
+| `project_path`         | string   | Path to the project (**required**) |
 | `provider`             | string   | LLM provider: `mock`, `openai`, `anthropic` |
 | `llm`                  | string   | Model name (e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`) |
 | `language`             | string   | Response language: `ru`, `en`, `zh` |
@@ -216,7 +212,7 @@ Checks the project against defined architecture rules. Optionally accepts archit
 
 | Parameter              | Type     | Description |
 |------------------------|----------|-------------|
-| `project_path`         | string   | Path to the project |
+| `project_path`         | string   | Path to the project (**required**) |
 | `provider`             | string   | LLM provider |
 | `llm`                  | string   | Model name |
 | `language`             | string   | Response language: `ru`, `en`, `zh` |
@@ -281,7 +277,7 @@ Audits an individual file or directory: correctness, design quality, coupling, c
 | Parameter              | Type   | Description |
 |------------------------|--------|-------------|
 | `module_path`          | string | Path to the file or directory to audit |
-| `project_path`         | string | Project root path |
+| `project_path`         | string | Project root path (**required**) |
 | `provider`             | string | LLM provider |
 | `llm`                  | string | Model name |
 | `language`             | string | Response language: `ru`, `en`, `zh` |

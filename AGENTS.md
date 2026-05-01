@@ -16,6 +16,10 @@ CLI flags > `.env` > hardcoded defaults.
 
 defaults: `PROVIDER=mock`, `LLM=gpt-4o`, `PORT=8080`, `LANGUAGE=ru`, HTTP timeout: 10 minutes
 
+`.env` keys: `PROVIDER`, `LLM`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ENDPOINT`, `PORT`, `LANGUAGE`
+
+Unknown providers fall back to OpenAI-compatible API. Use `ENDPOINT` for third-party providers (OpenRouter, Groq, local Ollama, etc.).
+
 ## Build, Test, Run
 
 ```bash
@@ -39,13 +43,13 @@ internal/domain/    # Data models
 
 1. Add input struct in `internal/tools/executor.go`
 2. Add method to `ToolExecutor`
-3. Register tool in `internal/mcp/server.go` (add to `tools` slice)
-4. Add case in `handleToolsCall`
+3. Register tool in `internal/mcp/server.go` (add to `tools` slice in `handleToolsList`)
+4. Add case in `handleToolsCall` in `internal/mcp/server.go`
 
 ## Debug Mode
 
 ```bash
-go run ./cmd -debug -project /path/to/project
+go run ./cmd -debug
 ```
 
-Reports saved to `<project>/debug/` as `.md` and `.json`.
+Prompts saved to `<project_path>/debug/input/`. Reports saved to `<project_path>/debug/` as `.md` and `.json`.

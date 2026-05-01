@@ -196,15 +196,15 @@ ByName(name string) (ProjectAnalyzer, bool)
 
 Приоритет: `CLI flags` > `.env file` > `hardcoded defaults`
 
-| Параметр | Дефолт | Описание |
-|---|---|---|
-| PROVIDER | mock | LLM-провайдер |
-| LLM | gpt-4o | Модель |
-| PORT | 8080 | HTTP-порт |
-| LANGUAGE | ru | Язык ответа |
-| PROJECT | — | Дефолтный путь к проекту |
-| OPENAI_API_KEY | — | Ключ OpenAI |
-| ANTHROPIC_API_KEY | — | Ключ Anthropic |
+| Параметр          | Дефолт | Описание                                    |
+| -------------------| --------| ---------------------------------------------|
+| PROVIDER          | mock   | LLM-провайдер                               |
+| LLM               | gpt-4o | Модель                                      |
+| PORT              | 8080   | HTTP-порт                                   |
+| LANGUAGE          | ru     | Язык ответа                                 |
+| ENDPOINT          | —      | Кастомный endpoint (OpenAI-совместимые API) |
+| OPENAI_API_KEY    | —      | Ключ OpenAI                                 |
+| ANTHROPIC_API_KEY | —      | Ключ Anthropic                              |
 
 Язык программирования (`programming_language`) передаётся per-call через аргументы инструмента,
 не через глобальный конфиг.
